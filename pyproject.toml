@@ -1,0 +1,15 @@
+[project]
+name = "projeto-python-modular"
+version = "0.1.0"
+description = "Estrutura inicial de projeto Python modular com testes unitários."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0"
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
