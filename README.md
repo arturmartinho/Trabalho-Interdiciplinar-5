@@ -11,12 +11,12 @@
 ```mermaid
 kanban
     todo[To Do]
-        s01t03["[Artur F.] Escrever Introdução"]
-        s01t04["[Felipe] Escrever Metodologia"]
         s01t05["[Rafael] Montar apresentação c/ roteiro"]
     doing[Doing]
         s01t01["[Felipe] Criar repositório no _Classroom 50_"]
         s01t02["[Gabriel] Pesquisar artigos e escrever revisão bibliográfica"]
+        s01t03["[Artur R.] Escrever Introdução"]
+        s01t04["[Felipe] Escrever Metodologia"]
     done[Done]
 ```
 
