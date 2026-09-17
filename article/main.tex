@@ -37,32 +37,46 @@ Ullamco nostrud aliquip proident ex ullamco ullamco nostrud adipisicing. Non com
 
 Do irure proident est ex amet commodo commodo esse amet consectetur. Magna magna velit pariatur velit sit est adipisicing proident officia commodo. Pariatur in proident sit commodo eiusmod voluptate incididunt nulla pariatur consectetur esse nostrud proident elit.
 
-\section{Metodologia}
+\section{Metodologia de Desenvolvimento e Avaliação}
 
-Sunt id proident id nisi laborum est officia qui pariatur nulla culpa eiusmod velit. Duis ipsum anim eiusmod commodo duis minim sit laborum ipsum. Magna dolor non occaecat est est ut quis eu. Culpa magna culpa commodo ea ea commodo non mollit exercitation cillum in in. Eiusmod veniam magna eu ut anim nulla fugiat aute. Do labore qui minim ipsum sunt cillum mollit sunt anim esse ipsum laboris velit \cite{article:1}.
+A metodologia adotada neste trabalho organiza-se em torno de ciclos semanais de desenvolvimento e avaliação, conforme apresentado na Tabela \ref{tab:cronograma}. Se espera ter até a sexta semana um código completo capaz de atender nossos requisitos e ser utilizado para as medições, a partir disso o foco do trabalho se vira para coleta de resultados, melhorias, redação do artigo e apresentações.
 
-Reprehenderit consequat proident aliqua duis. Non elit esse veniam proident. Eu nostrud irure voluptate laboris adipisicing culpa duis in consequat elit reprehenderit magna adipisicing. Lorem duis reprehenderit Lorem labore do veniam ad anim et sint ea et nulla \cite{article:2}.
-
-Nisi elit est consectetur Lorem. Nisi tempor anim amet qui minim et ex enim dolore. Ad ad ipsum mollit ea sint deserunt culpa id ullamco reprehenderit qui Lorem voluptate irure. Consectetur enim enim laboris sunt nisi exercitation veniam laborum anim incididunt in incididunt labore. Nisi voluptate nulla incididunt consequat adipisicing officia aute adipisicing commodo eiusmod tempor exercitation exercitation Lorem. Est et fugiat reprehenderit adipisicing proident. Cillum fugiat Lorem tempor cupidatat id labore labore sint et amet \cite{article:3}.
-
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat \cite{article:4}.
-
-Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum \cite{article:5}.
-
-\begin{figure}[htbp]
+\begin{table}[htb]
 \centering
-\includegraphics[width=.5\textwidth]{fig1.jpg}
-\caption{Amet culpa sint ea elit ut.}
-\label{fig:1}
-\end{figure}
+\caption{Cronograma de atividades do projeto.}
+\label{tab:cronograma}
+\begin{tabular}{p{2.2cm}p{11cm}}
+\hline
+\hline
+\textbf{Semana} & \textbf{Atividades principais} \\
+\hline
+\hline
+1 & Configuração do ambiente (Ollama, modelos leves), levantamento bibliográfico inicial. \\
+\hline
+2 & Desenvolvimento do classificador de prompts, implementação da versão inicial do LoadBalancer. \\
+\hline
+3 (Sprint 2) & Detalhamento da implementação, coleta de resultados preliminares, preparação e apresentação oral do Sprint 2. \\
+\hline
+4 & Refinamento do classificador, implementação de métricas de monitoramento, escrita da metodologia. \\
+\hline
+5 & Expansão do conjunto de testes, execução de experimentos comparativos, análise estatística dos resultados. \\
+\hline
+6 & Otimização do LoadBalancer, testes automatizados de roteamento, escrita da seção de resultados. \\
+\hline
+7 & Comparação com trabalhos relacionados, redação da seção comparativa, preparação de material visual para o pitch. \\
+\hline
+8 & Redação das conclusões, revisão e refinamento do artigo, roteiro do pitch comercial. \\
+\hline
+9 (Sprint 3) & Gravação e edição do pitch comercial, preparação e apresentação oral final. \\
+\hline
+10 & Submissão final do artigo, documentação do projeto e entrega dos materiais de apresentação. \\
+\hline
+\end{tabular}
+\end{table}
 
-\subsection{Esse tempor in elit dolore ad}
+Quanto ao método de avaliação e validação foi escolhida a medição em ambiente controlado complementada pela analise dos resultados, isso porque o desempenho de um LoadBalancer para modelos de IA depende de fatores dinâmicos do ambiente que não podem ser capturados por simulações. A validação será conduzida por meio de experimentos comparativos entre dois cenários: (i) \textit{baseline}, no qual todas as requisições são direcionadas ao modelo de maior porte; e (ii) \textit{proposta}, na qual o LoadBalancer classifica o prompt e o encaminha ao modelo mais adequado. Serão coletadas métricas de latência média, P95 e P99, além de uso de RAM e GPU por máquina, a análise estatística dos dados incluirá identificação de outliers e geração de gráficos comparativos.
 
-Aliquip et ad eiusmod commodo enim labore et commodo Lorem eu sit velit. Do sit proident commodo ullamco. Dolore culpa dolor nostrud labore ullamco velit amet nisi. Dolore quis officia deserunt aliquip mollit enim eiusmod esse exercitation duis consequat fugiat culpa. Fugiat adipisicing magna culpa excepteur ea ex ut aliquip cupidatat enim anim dolor esse anim. Irure nostrud irure laboris laborum ex sunt consectetur ut sint voluptate do et minim. Ad ea cupidatat pariatur consequat irure ad quis ipsum aliqua elit aliquip \ref{fig:1}.
-
-\subsection{Velit qui officia.}
-
-Dolore sit ex exercitation pariatur irure. Culpa qui ullamco elit ea voluptate enim consectetur est et ut dolore aliqua mollit. Irure dolore adipisicing sint adipisicing adipisicing incididunt aliquip eu adipisicing duis occaecat id aliquip. Irure mollit velit labore irure. Ad officia cillum non labore amet irure ipsum.
+O ambiente experimental será composto por máquinas executando o Ollama com modelos leves (Phi-3.5-mini, Qwen2.5-Coder-0.5B e AILO-152M-v2), e o LoadBalancer será implementado em Python com FastAPI, utilizando \texttt{httpx} para comunicação com os servidores de inferência. Ajustes podem envolver a inclusão de novas métricas, a alteração do conjunto de modelos avaliados ou a adoção complementar de técnicas de simulação, caso se mostrem necessárias para validar aspectos específicos do sistema.
 
 \section{Resultados}
 
