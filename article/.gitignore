@@ -1,0 +1,103 @@
+# Core LaTeX output files
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.dvi
+*.fdb_latexmk
+*.fls
+*.glg
+*.glo
+*.gls
+*.glsdefs
+*.idx
+*.ilg
+*.ind
+*.ist
+*.lof
+*.log
+*.lot
+*.nav
+*.out
+*.ps
+*.pyg
+*.run.xml
+*.snm
+*.synctex.gz
+*.toc
+*.vrb
+*.xdv
+
+# Output
+# *.pdf
+
+# Generated indexes and glossaries
+*.acn
+*.acr
+*.alg
+*.auxlock
+
+# TikZ externalization
+*-tikzExternalCache*
+*.dpth
+*.md5
+
+# LaTeX workshop auxiliary files (VS Code)
+*.synctex(busy)
+*.synctex.gz(busy)
+
+# Thumbnails and temporary files
+*.lol
+*.thm
+*.loe
+*.listing
+*.maf
+*.mtc*
+*.vtc
+
+# Python tools (e.g., pygmentize)
+_minted-*
+
+# Backup files
+*.bak
+*.backup
+*.~*
+*~
+
+# Emacs auto-save files
+\#*\#
+.#*
+
+# Vim swap files
+*.swp
+*.swo
+*.swn
+
+# macOS metadata
+.DS_Store
+
+# Windows thumbnails
+Thumbs.db
+
+# Linux/Mac temporary files
+.directory
+
+# Build directories
+build/
+output/
+temp/
+tmp/
+
+# IDE specific (optional)
+.idea/
+.vscode/
+*.tex.swp
+*.tex.swo
+
+# Mermaid files
+mermaid/**
+
+# Custom: If you want to keep the final PDF, comment out the PDF line above
+# Or use selective ignoring like:
+# *.pdf  # uncomment this if you want PDFs ignored
+# !main.pdf  # but keep the main compiled PDF

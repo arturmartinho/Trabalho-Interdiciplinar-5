@@ -11,9 +11,9 @@
 
 \sloppy
 
-\title{Ut reprehenderit ex reprehenderit magna non cupidatat excepteur labore id id eiusmod.}
+\title{Load Balancer para Modelos de IA}
 
-\author{Commodo minim\inst{1}, Culpa eu in exercitation\inst{1}}
+\author{Artur Fernandes Braga de Menezes\inst{1}, Artur Rizzi Martinho\inst{1},\\ Felipe Lacerda Tertuliano\inst{1}, Gabriel Alves da Silva Diógenes\inst{1},\\ Rafael Mortimer Colares\inst{1}}
 
 \address{Pontifícia Universidade Católica de Minas Gerais (PUC Minas)\\30.535-901 - Belo Horizonte - MG - Brazil}
 
@@ -35,7 +35,15 @@ Ullamco nostrud aliquip proident ex ullamco ullamco nostrud adipisicing. Non com
 
 \section{Introdução}
 
-Do irure proident est ex amet commodo commodo esse amet consectetur. Magna magna velit pariatur velit sit est adipisicing proident officia commodo. Pariatur in proident sit commodo eiusmod voluptate incididunt nulla pariatur consectetur esse nostrud proident elit.
+A evolução dos modelos de Inteligência Artificial (IA), especialmente dos Grandes Modelos de Linguagem (Large Language Models — LLMs), tem ampliado significativamente a capacidade dos sistemas computacionais de realizar tarefas como geração e compreensão de texto, programação e processamento de informações. Entretanto, o aumento da capacidade desses modelos também está associado a uma maior demanda por recursos computacionais durante sua utilização. Além disso, diferentes aplicações podem apresentar requisitos distintos de processamento, latência e utilização de recursos, tornando o gerenciamento eficiente das requisições um desafio relevante para sistemas que disponibilizam modelos de IA em larga escala. Estudos sobre sistemas de serving de LLMs destacam justamente a heterogeneidade das requisições e a necessidade de mecanismos eficientes para distribuir e agendar sua execução \cite{article:llm_gpu,article:llumnix}.
+
+Nesse contexto, utilizar um único modelo de grande porte para atender diferentes tipos de requisições pode resultar em uma utilização pouco eficiente dos recursos disponíveis, principalmente quando determinadas tarefas poderiam ser executadas por modelos menores ou especializados. O problema também se estende à distribuição das requisições entre diferentes instâncias, uma vez que variações na demanda podem provocar sobrecarga em determinados recursos enquanto outros permanecem subutilizados. Trabalhos recentes demonstram que estratégias de balanceamento e escalonamento podem melhorar a utilização da infraestrutura disponível. O SkyWalker, por exemplo, propõe um mecanismo de balanceamento de carga entre diferentes regiões para inferência de LLMs, buscando utilizar os recursos de forma mais eficiente e reduzir custos de serving \cite{article:skywalker}. De forma semelhante, o Llumnix explora o reagendamento dinâmico de requisições entre múltiplas instâncias de modelos para lidar com diferentes requisitos de recursos e latência \cite{article:llumnix}.
+
+Diante desse cenário, este trabalho propõe o estudo e desenvolvimento de um Load Balancer voltado para modelos de IA, capaz de distribuir as requisições entre diferentes modelos de acordo com suas características e com a disponibilidade dos recursos. A utilização de múltiplos modelos pode permitir que diferentes tipos de solicitações sejam direcionados para alternativas mais adequadas, evitando o uso desnecessário de modelos de maior porte quando modelos mais simples forem suficientes para determinada tarefa. Dessa forma, busca-se investigar os possíveis impactos dessa abordagem sobre aspectos como utilização dos recursos computacionais, tempo de resposta e custo de processamento. A literatura demonstra que mecanismos de balanceamento e escalonamento aplicados ao serving de LLMs podem proporcionar ganhos de desempenho e redução de custos, reforçando a relevância de investigar estratégias semelhantes em arquiteturas compostas por múltiplos modelos \cite{article:llm_gpu,article:skywalker,article:llumnix}.
+
+\section{Revisão bibliográfica}
+
+Revisão bibliográfica aqui
 
 \section{Metodologia de Desenvolvimento e Avaliação}
 
