@@ -1,11 +1,7 @@
-import json
 import os
 import platform
 import shutil
 import subprocess
-import sys
-import urllib.request
-import urllib.error
 import requests
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
@@ -28,7 +24,15 @@ class AIModelDM(DataModel):
         "url": "TEXT",
     }
 
-    def __init__(self, name: str, type: str, status: str = "down", url: str = ""):
+    def __init__(
+        self,
+        name: str,
+        type: str,
+        status: str = "down",
+        url: str = "",
+        id: Optional[int] = None,
+    ):
+        self.id = id
         self.name = name
         self.type = type
         self.status = status
@@ -40,7 +44,7 @@ class AIModelDM(DataModel):
     def display(self) -> str:
         """Return a human-readable string of the model."""
         icon = "🟢" if self.status == "up" else "🔴"
-        return f"{icon} {self.name} | type={self.type} | status={self.status}"
+        return f"{icon} {self.name} | {self.type} | {self.status}"
 
     def __repr__(self) -> str:
         return self.display()
@@ -150,6 +154,109 @@ class AIModelDM(DataModel):
         return True
 
     # ------------------------------------------------------------------ #
+    # Stop (local)
+    # ------------------------------------------------------------------ #
+    @classmethod
+    def stop(cls, name: Optional[str] = None) -> bool:
+        """Stop (unload) a local AI model from memory.
+
+        If `name` is None, stops all currently running local models.
+        Updates the `status` to 'down' in the DB on success.
+        """
+        if name:
+            return cls._stop_one(name)
+
+        # Stop all running local models
+        running = cls._list_running_local()
+        if not running:
+            log.info("No local AI models are currently running.")
+            return True
+
+        all_ok = True
+        for model_name in running:
+            if not cls._stop_one(model_name):
+                all_ok = False
+        return all_ok
+
+    @classmethod
+    def _stop_one(cls, name: str) -> bool:
+        row = cls.read({"name": name}, many=False)
+        if not row:
+            log.warning(f"AI model '{name}' not found in DB.")
+            return False
+
+        if row["type"] != "local":
+            log.warning(f"'{name}' is not a local model (type={row['type']}). "
+                        "Only local models can be stopped.")
+            return False
+
+        url = row.get("url") or OLLAMA_HOST
+
+        if not cls._is_model_running(name):
+            log.info(f"Model '{name}' is not running.")
+            cls._set_status(name, "down")
+            return True
+
+        log.info(f"Stopping local AI model: {name}")
+        if not cls._unload_model(name, url):
+            log.error(f"Failed to stop model '{name}'.")
+            return False
+
+        cls._set_status(name, "down")
+        log.success(f"AI model '{name}' stopped.")
+        return True
+
+    @staticmethod
+    def _unload_model(name: str, url: str) -> bool:
+        """Unload a model from Ollama memory.
+
+        Uses `keep_alive: 0`, which tells Ollama to unload the model
+        immediately after the (empty) request completes.
+        """
+        try:
+            resp = requests.post(
+                f"{url}/api/generate",
+                json={"model": name, "prompt": "", "keep_alive": 0},
+                timeout=30,
+            )
+            if resp.status_code != 200:
+                log.debug(f"Unload request returned {resp.status_code}: {resp.text}")
+                # Fallback: try /api/chat (some versions)
+                resp = requests.post(
+                    f"{url}/api/chat",
+                    json={
+                        "model": name,
+                        "messages": [],
+                        "keep_alive": 0,
+                    },
+                    timeout=30,
+                )
+                if resp.status_code != 200:
+                    return False
+            return not AIModelDM._is_model_running(name)
+        except Exception as e:
+            log.error(f"Failed to unload '{name}': {e}")
+            return False
+
+    @staticmethod
+    def _list_running_local() -> List[str]:
+        """Return names of currently running local Ollama models."""
+        try:
+            resp = requests.get(f"{OLLAMA_HOST}/api/ps", timeout=5)
+            if resp.status_code != 200:
+                return []
+            models = resp.json().get("models", [])
+            return [m.get("name", "") for m in models if m.get("name")]
+        except Exception as e:
+            log.debug(f"Could not list running models: {e}")
+            return []
+
+    @classmethod
+    def _set_status(cls, name: str, status: str) -> None:
+        """Update a model's status in the DB."""
+        super().update({"name": name}, {"status": status})
+
+    # ------------------------------------------------------------------ #
     # Connect (remote)
     # ------------------------------------------------------------------ #
     @classmethod
@@ -205,7 +312,7 @@ class AIModelDM(DataModel):
     def _upsert(cls, name: str, type_: str, status: str, url: str) -> None:
         existing = cls.read({"name": name}, many=False)
         if existing:
-            cls.update({"name": name}, {"type": type_, "status": status, "url": url})
+            super().update({"name": name}, {"type": type_, "status": status, "url": url})
             log.debug(f"Updated AI model '{name}' in DB.")
         else:
             cls.create({"name": name, "type": type_, "status": status, "url": url})

@@ -23,6 +23,7 @@ def ai_models_menu() -> None:
         print("  4. Update AI Model status")
         print("  5. Call an AI Model")
         print("  6. Delete an AI Model")
+        print("  7. Stop a local AI Model")
         print("  0. Back")
 
         choice = input("Choose an option: ").strip()
@@ -70,6 +71,11 @@ def ai_models_menu() -> None:
             if name:
                 AIModelDM.delete({"name": name})
                 log.success(f"Deleted '{name}'.")
+            _pause()
+
+        elif choice == "7":
+            name = input("Model name to stop (blank = all running): ").strip() or None
+            AIModelDM.stop(name)
             _pause()
 
         elif choice == "0":
