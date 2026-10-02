@@ -44,7 +44,7 @@ class AIModelDM(DataModel):
     def display(self) -> str:
         """Return a human-readable string of the model."""
         icon = "🟢" if self.status == "up" else "🔴"
-        return f"{icon} {self.name} | {self.type} | {self.status}"
+        return f"{self.id}. {icon} {self.name} | {self.type} | {self.status}"
 
     def __repr__(self) -> str:
         return self.display()
@@ -55,7 +55,7 @@ class AIModelDM(DataModel):
     @classmethod
     def list(cls) -> List[Dict[str, Any]]:
         """List all AI models stored in the DB."""
-        rows = cls.read(many=True)
+        rows = super().read(many=True)
         log.debug(f"Found {len(rows)} AI model(s).")
         return rows
 
@@ -68,16 +68,16 @@ class AIModelDM(DataModel):
     # Update status
     # ------------------------------------------------------------------ #
     @classmethod
-    def update(cls, name: Optional[str] = None) -> List[Dict[str, Any]]:
+    def update(cls, id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Check if one (or all) AI model(s) is up and update status in DB.
 
         Returns the updated rows.
         """
-        rows = cls.read({"name": name}, many=False) if name else cls.read(many=True)
-        if name and not rows:
-            log.warning(f"AI model '{name}' not found.")
+        rows = super().read({"id": id}, many=False) if id is not None else super().read(many=True)
+        if id is not None and not rows:
+            log.warning(f"AI model id={id} not found.")
             return []
-        if not name:
+        if id is None:
             rows = rows if isinstance(rows, list) else [rows]
 
         updated: List[Dict[str, Any]] = []
@@ -97,7 +97,11 @@ class AIModelDM(DataModel):
 
     @staticmethod
     def _ping(name: str, type_: str, url: str) -> bool:
-        """Return True if the model endpoint is reachable."""
+        """Return True if the model endpoint is reachable.
+
+        `name` here is the actual model name (e.g. Ollama model tag),
+        not a DB identifier.
+        """
         try:
             if type_ == "local":
                 resp = requests.get(f"{url}/api/tags", timeout=3)
@@ -118,8 +122,17 @@ class AIModelDM(DataModel):
     # ------------------------------------------------------------------ #
     @classmethod
     def host(cls, name: str) -> bool:
-        """Host an AI model locally via Ollama."""
+        """Host an AI model locally via Ollama.
+
+        Only one local model can be 'up' at a time: any other local model
+        currently running is stopped before starting this one.
+        """
         log.info(f"Hosting local AI model: {name}")
+
+        row = super().read({"name": name, "type": "local"}, False)
+        if row:
+            log.warning(f"Model '{name}' id already being hosted")
+            return False
 
         # 1. Check ollama installed
         if not cls._is_ollama_installed():
@@ -157,14 +170,14 @@ class AIModelDM(DataModel):
     # Stop (local)
     # ------------------------------------------------------------------ #
     @classmethod
-    def stop(cls, name: Optional[str] = None) -> bool:
+    def stop(cls, id: Optional[int] = None) -> bool:
         """Stop (unload) a local AI model from memory.
 
-        If `name` is None, stops all currently running local models.
+        If `id` is None, stops all currently running local models.
         Updates the `status` to 'down' in the DB on success.
         """
-        if name:
-            return cls._stop_one(name)
+        if id is not None:
+            return cls._stop_one(id)
 
         # Stop all running local models
         running = cls._list_running_local()
@@ -174,19 +187,33 @@ class AIModelDM(DataModel):
 
         all_ok = True
         for model_name in running:
-            if not cls._stop_one(model_name):
+            # Resolve the running Ollama model name back to a DB row by name
+            row = super().read({"name": model_name, "type": "local"}, many=False)
+            if not row:
+                # Try matching by base name (without tag)
+                base = model_name.split(":")[0]
+                for candidate in super().read(many=True):
+                    if candidate and candidate["name"].split(":")[0] == base:
+                        row = candidate
+                        break
+            if not row:
+                log.warning(f"Running model '{model_name}' has no DB entry; skipping DB update.")
+                continue
+            if not cls._stop_one(row["id"]):
                 all_ok = False
         return all_ok
 
     @classmethod
-    def _stop_one(cls, name: str) -> bool:
-        row = cls.read({"name": name}, many=False)
+    def _stop_one(cls, id: int) -> bool:
+        row = super().read({"id": id}, many=False)
         if not row:
-            log.warning(f"AI model '{name}' not found in DB.")
+            log.warning(f"AI model id={id} not found in DB.")
             return False
 
+        name = row["name"]
+
         if row["type"] != "local":
-            log.warning(f"'{name}' is not a local model (type={row['type']}). "
+            log.warning(f"'{name}' (id={id}) is not a local model (type={row['type']}). "
                         "Only local models can be stopped.")
             return False
 
@@ -194,15 +221,15 @@ class AIModelDM(DataModel):
 
         if not cls._is_model_running(name):
             log.info(f"Model '{name}' is not running.")
-            cls._set_status(name, "down")
+            cls._set_status(id, "down")
             return True
 
-        log.info(f"Stopping local AI model: {name}")
+        log.info(f"Stopping local AI model: {name} (id={id})")
         if not cls._unload_model(name, url):
             log.error(f"Failed to stop model '{name}'.")
             return False
 
-        cls._set_status(name, "down")
+        cls._set_status(id, "down")
         log.success(f"AI model '{name}' stopped.")
         return True
 
@@ -253,9 +280,9 @@ class AIModelDM(DataModel):
             return []
 
     @classmethod
-    def _set_status(cls, name: str, status: str) -> None:
-        """Update a model's status in the DB."""
-        super().update({"name": name}, {"status": status})
+    def _set_status(cls, model_id: int, status: str) -> None:
+        """Update a model's status in the DB by ID."""
+        super().update({"id": model_id}, {"status": status})
 
     # ------------------------------------------------------------------ #
     # Connect (remote)
@@ -263,6 +290,11 @@ class AIModelDM(DataModel):
     @classmethod
     def connect(cls, name: str, url: str) -> bool:
         """Connect to a remote AI model."""
+        row = super().read({"name": name, "type": "remote", "url": url}, False)
+        if row:
+            log.warning(f"Model '{name}' id already connected")
+            return False
+
         log.info(f"Connecting to remote AI model: {name} @ {url}")
         if not cls._ping(name, "remote", url):
             log.error(f"Could not connect to remote AI model '{name}' at {url}.")
@@ -278,7 +310,7 @@ class AIModelDM(DataModel):
     @classmethod
     def call(cls, name: str, prompt: str) -> Optional[str]:
         """Call a specific AI model with a prompt and return the answer."""
-        row = cls.read({"name": name}, many=False)
+        row = super().read({"name": name}, many=False)
         if not row:
             log.error(f"AI model '{name}' not found.")
             return None
@@ -311,12 +343,12 @@ class AIModelDM(DataModel):
     # ------------------------------------------------------------------ #
     @classmethod
     def _upsert(cls, name: str, type_: str, status: str, url: str) -> None:
-        existing = cls.read({"name": name}, many=False)
+        existing = super().read({"name": name, "type": type_}, many=False)
         if existing:
-            super().update({"name": name}, {"type": type_, "status": status, "url": url})
+            super().update({"id": existing["id"]}, {"type": type_, "status": status, "url": url})
             log.debug(f"Updated AI model '{name}' in DB.")
         else:
-            cls.create({"name": name, "type": type_, "status": status, "url": url})
+            super().create({"name": name, "type": type_, "status": status, "url": url})
             log.debug(f"Inserted AI model '{name}' into DB.")
 
     @staticmethod

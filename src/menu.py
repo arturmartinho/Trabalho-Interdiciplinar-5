@@ -50,8 +50,9 @@ def ai_models_menu() -> None:
             _pause()
 
         elif choice == "4":
-            name = input("Model name (blank = all): ").strip() or None
-            updated = AIModelDM.update(name)
+            _print_models(AIModelDM.list())
+            id = input("Model ID (blank = all): ").strip()
+            updated = AIModelDM.update(int(id) if id else None)
             _print_models(updated)
             _pause()
 
@@ -67,15 +68,17 @@ def ai_models_menu() -> None:
             _pause()
 
         elif choice == "6":
-            name = input("Model name to delete: ").strip()
-            if name:
-                AIModelDM.delete({"name": name})
-                log.success(f"Deleted '{name}'.")
+            _print_models(AIModelDM.list())
+            id = input("Model ID to delete: ").strip()
+            if id:
+                AIModelDM.delete({"id": int(id)})
+                log.success(f"Deleted Model with ID = {id}.")
             _pause()
 
         elif choice == "7":
-            name = input("Model name to stop (blank = all running): ").strip() or None
-            AIModelDM.stop(name)
+            _print_models(AIModelDM.list())
+            id = input("Model ID to stop (blank = all running): ").strip()
+            AIModelDM.stop(int(id) if id else None)
             _pause()
 
         elif choice == "0":
