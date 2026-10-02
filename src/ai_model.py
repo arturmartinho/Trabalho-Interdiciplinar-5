@@ -233,6 +233,66 @@ class AIModelDM(DataModel):
         log.success(f"AI model '{name}' stopped.")
         return True
 
+    # ------------------------------------------------------------------ #
+    # Resume (local)
+    # ------------------------------------------------------------------ #
+    @classmethod
+    def resume(cls, id: Optional[int] = None) -> bool:
+        """Resume (load) a local AI model into memory.
+
+        If `id` is None, resumes all local models currently marked as 'down'
+        in the DB. Updates the `status` to 'up' in the DB on success.
+        """
+        if id is not None:
+            return cls._resume_one(id)
+
+        candidates = super().read({"type": "local", "status": "down"}, many=True)
+        if not candidates:
+            log.info("No local AI models to resume.")
+            return True
+
+        all_ok = True
+        for row in candidates:
+            if not cls._resume_one(row["id"]):
+                all_ok = False
+        return all_ok
+
+    @classmethod
+    def _resume_one(cls, id: int) -> bool:
+        row = super().read({"id": id}, many=False)
+        if not row:
+            log.warning(f"AI model id={id} not found in DB.")
+            return False
+
+        name = row["name"]
+
+        if row["type"] != "local":
+            log.warning(f"'{name}' (id={id}) is not a local model (type={row['type']}). Only local models can be resumed.")
+            return False
+
+        url = row.get("url") or OLLAMA_HOST
+
+        if cls._is_model_running(name):
+            log.info(f"Model '{name}' is already running.")
+            cls._set_status(id, "up")
+            return True
+
+        # Make sure the model is installed before trying to run it
+        if not cls._is_model_installed(name):
+            log.warning(f"Model '{name}' not installed locally. Pulling...")
+            if not cls._pull_model(name):
+                log.error(f"Failed to pull model '{name}'.")
+                return False
+
+        log.info(f"Resuming local AI model: {name} (id={id})")
+        if not cls._run_model(name):
+            log.error(f"Failed to resume model '{name}'.")
+            return False
+
+        cls._set_status(id, "up")
+        log.success(f"AI model '{name}' resumed.")
+        return True
+
     @staticmethod
     def _unload_model(name: str, url: str) -> bool:
         """Unload a model from Ollama memory.
@@ -308,34 +368,34 @@ class AIModelDM(DataModel):
     # Call
     # ------------------------------------------------------------------ #
     @classmethod
-    def call(cls, name: str, prompt: str) -> Optional[str]:
+    def call(cls, id: int, prompt: str) -> Optional[str]:
         """Call a specific AI model with a prompt and return the answer."""
-        row = super().read({"name": name}, many=False)
+        row = super().read({"id": id}, many=False)
         if not row:
-            log.error(f"AI model '{name}' not found.")
+            log.error(f"AI model '{id}' not found.")
             return None
 
         url = row.get("url") or OLLAMA_HOST
         try:
             if row["type"] == "local":
-                payload = {"model": name, "prompt": prompt, "stream": False}
+                payload = {"model": row["name"], "prompt": prompt, "stream": False}
                 resp = requests.post(f"{url}/api/generate", json=payload, timeout=120)
                 resp.raise_for_status()
                 answer = resp.json().get("response", "")
             else:
                 # Generic remote OpenAI-compatible endpoint
                 payload = {
-                    "model": name,
+                    "model": row["name"],
                     "messages": [{"role": "user", "content": prompt}],
                 }
                 resp = requests.post(f"{url}/v1/chat/completions", json=payload, timeout=120)
                 resp.raise_for_status()
                 answer = resp.json()["choices"][0]["message"]["content"]
 
-            log.debug(f"Model '{name}' responded.")
+            log.debug(f"Model '{id}' responded.")
             return answer
         except Exception as e:
-            log.error(f"Failed to call model '{name}': {e}")
+            log.error(f"Failed to call model '{id}': {e}")
             return None
 
     # ------------------------------------------------------------------ #

@@ -18,12 +18,13 @@ def ai_models_menu() -> None:
     while True:
         print("\n=== AI Models ===")
         print("  1. List AI Models")
-        print("  2. Host a local AI Model")
-        print("  3. Connect to a remote AI Model")
-        print("  4. Update AI Model status")
-        print("  5. Call an AI Model")
-        print("  6. Delete an AI Model")
-        print("  7. Stop a local AI Model")
+        print("  2. Call an AI Model")
+        print("  3. Host a local AI Model")
+        print("  4. Connect to a remote AI Model")
+        print("  5. Stop a local AI Model")
+        print("  6. Resume a local AI Model")
+        print("  7. Update AI Model status")
+        print("  8. Delete an AI Model")
         print("  0. Back")
 
         choice = input("Choose an option: ").strip()
@@ -33,6 +34,18 @@ def ai_models_menu() -> None:
             _pause()
 
         elif choice == "2":
+            _print_models(AIModelDM.list())
+            id = input("Model id: ").strip()
+            prompt = input("Prompt: ").strip()
+            if not id or not prompt:
+                print("Cancelled.")
+            else:
+                answer = AIModelDM.call(id, prompt)
+                print("\n--- Answer ---")
+                print(answer if answer else "(no answer)")
+            _pause()
+
+        elif choice == "3":
             name = input("Model name to host (e.g. llama3.2): ").strip()
             if not name:
                 print("Cancelled.")
@@ -40,45 +53,40 @@ def ai_models_menu() -> None:
                 AIModelDM.host(name)
             _pause()
 
-        elif choice == "3":
-            name = input("Remote model name: ").strip()
-            url = input("Remote URL (e.g. http://host:11434): ").strip()
+        elif choice == "4":
+            name = input("Remote model name to connect: ").strip()
+            url = input("Remote URL to connect (e.g. http://host:11434): ").strip()
             if not name or not url:
                 print("Cancelled.")
             else:
                 AIModelDM.connect(name, url)
             _pause()
 
-        elif choice == "4":
+        elif choice == "5":
             _print_models(AIModelDM.list())
-            id = input("Model ID (blank = all): ").strip()
+            id = input("Model ID to stop (blank = all running): ").strip()
+            AIModelDM.stop(int(id) if id else None)
+            _pause()
+
+        elif choice == "6":
+            _print_models(AIModelDM.list())
+            id = input("Model ID to resume (blank = all stopped): ").strip()
+            AIModelDM.resume(int(id) if id else None)
+            _pause()
+
+        elif choice == "7":
+            _print_models(AIModelDM.list())
+            id = input("Model ID to update (blank = all): ").strip()
             updated = AIModelDM.update(int(id) if id else None)
             _print_models(updated)
             _pause()
 
-        elif choice == "5":
-            name = input("Model name: ").strip()
-            prompt = input("Prompt: ").strip()
-            if not name or not prompt:
-                print("Cancelled.")
-            else:
-                answer = AIModelDM.call(name, prompt)
-                print("\n--- Answer ---")
-                print(answer if answer else "(no answer)")
-            _pause()
-
-        elif choice == "6":
+        elif choice == "8":
             _print_models(AIModelDM.list())
             id = input("Model ID to delete: ").strip()
             if id:
                 AIModelDM.delete({"id": int(id)})
                 log.success(f"Deleted Model with ID = {id}.")
-            _pause()
-
-        elif choice == "7":
-            _print_models(AIModelDM.list())
-            id = input("Model ID to stop (blank = all running): ").strip()
-            AIModelDM.stop(int(id) if id else None)
             _pause()
 
         elif choice == "0":
