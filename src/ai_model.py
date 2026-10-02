@@ -238,6 +238,7 @@ class AIModelDM(DataModel):
             log.error(f"Failed to unload '{name}': {e}")
             return False
 
+    #TODO: Ollama runs only one model at a time
     @staticmethod
     def _list_running_local() -> List[str]:
         """Return names of currently running local Ollama models."""
