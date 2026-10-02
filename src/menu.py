@@ -89,7 +89,7 @@ def ai_models_menu() -> None:
 
 def menu() -> None:
     while True:
-        print("\n=== AI Host Project ===")
+        print("\n=== AI LoadBalancer ===")
         print("  1. AI Models")
         print("  0. Exit")
 
