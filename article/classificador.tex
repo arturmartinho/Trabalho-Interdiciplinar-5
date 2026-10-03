@@ -1,0 +1,29 @@
+% Subseção do classificador de prompts (Aluno 2) -- incluir com \input{classificador}
+\subsection{Classificador de prompts}
+
+O classificador decide, antes do despacho, qual dos três modelos atende cada requisição. Nesta Sprint ele foi implementado por regras, e não por aprendizado, por dois motivos: a decisão precisa ser estável entre rodadas para que as diferenças de latência entre \textit{baseline} e proposta possam ser atribuídas ao roteamento, e cada decisão precisa ser explicável no log.
+
+A implementação é a função pura \texttt{classificar(prompt)}, em \texttt{src/classificador.py}. Ela não faz entrada e saída nem depende de estado: a mesma entrada produz sempre a mesma saída. O texto é convertido para minúsculas e tem os acentos removidos; em seguida, as regras da Tabela~\ref{tab:regras-classificador} são avaliadas em ordem, e a primeira que se aplica define a classe.
+
+\begin{table}[ht]
+\centering
+\caption{Regras do classificador, em ordem de prioridade}
+\label{tab:regras-classificador}
+\begin{tabular}{clll}
+\hline
+\textbf{\#} & \textbf{Condição} & \textbf{Classe} & \textbf{Modelo} \\ \hline
+1 & Prompt com mais de 120 palavras & complexo & Phi-3.5-mini \\
+2 & Sinal de código & código & Qwen2.5-Coder-0.5B \\
+3 & Sinal de raciocínio & complexo & Phi-3.5-mini \\
+4 & Até 25 palavras, sem sinais & simples & AILO-152M-v2 \\
+5 & Demais casos (ambíguo) & complexo & Phi-3.5-mini \\ \hline
+\end{tabular}
+\end{table}
+
+Os sinais de código são expressões regulares que identificam blocos de código delimitados por três crases, nomes de linguagens (Python, Java, SQL etc.), termos como ``função'', ``implemente'', ``bug'' e ``compilar'', e trechos de sintaxe como \texttt{def nome(} ou \texttt{import}. Os sinais de raciocínio identificam pedidos como ``explique'', ``por que'', ``compare'', ``analise'', ``passo a passo'' e ``resolva''. O limite de 120 palavras vem primeiro porque um pedido longo exige contexto que os modelos de 0,5B e 152M parâmetros tendem a não sustentar, qualquer que seja o tema.
+
+Há dois casos ambíguos tratados de forma explícita. Quando o prompt tem sinais de código e de raciocínio (por exemplo, ``explique por que este código Python é lento''), a regra de código tem prioridade, porque o modelo especializado conhece melhor o domínio, e o motivo registrado menciona os dois sinais. Quando o prompt tem tamanho médio e nenhum sinal, a escolha é o Phi-3.5-mini: errar para o modelo maior aumenta a latência, mas não compromete a resposta, ao passo que errar para o modelo menor pode comprometê-la.
+
+A função devolve a classe, o modelo escolhido, o motivo em texto e a contagem de palavras. A função \texttt{classificar\_e\_registrar} grava esses campos no log de cada requisição, junto com o identificador do prompt. Sem esse registro, a latência medida em um cenário não teria explicação: é ele que permite separar, na análise, as requisições atendidas por cada modelo e verificar se o classificador acertou a classe esperada do conjunto de prompts. A função tem testes automatizados para os três casos principais, para o pedido longo e para os dois casos ambíguos.
+
+Como limitação, regras por palavra-chave produzem falsos positivos (``o que é uma API?'' é factual, mas contém um sinal de código) e dependem do idioma. O refinamento do classificador, com novas categorias e a avaliação de acurácia sobre o conjunto rotulado, está previsto para a semana 4 do cronograma.
