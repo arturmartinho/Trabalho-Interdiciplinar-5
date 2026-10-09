@@ -100,6 +100,28 @@ Quanto ao método de avaliação e validação foi escolhida a medição em ambi
 
 O ambiente experimental será composto por máquinas executando o Ollama com modelos leves (Phi-3.5-mini, Qwen2.5-Coder-0.5B e AILO-152M-v2), e o LoadBalancer será implementado em Python com FastAPI, utilizando \texttt{httpx} para comunicação com os servidores de inferência. Ajustes podem envolver a inclusão de novas métricas, a alteração do conjunto de modelos avaliados ou a adoção complementar de técnicas de simulação, caso se mostrem necessárias para validar aspectos específicos do sistema.
 
+\section{Desenvolvimento e Implementação}
+
+% Subseção do Aluno 2, na branch feat/classificador:
+% \input{classificador}
+
+O recorte desta seção é o caminho da requisição, da API até o Ollama. O núcleo do balanceador é um serviço HTTP escrito em Python. Ele já registra, em segundos, a latência de cada tentativa e a latência total do despacho. A comparação entre o baseline e a proposta, com média, P95 e P99, permanece como etapa seguinte da campanha de medição.
+
+\subsection{Arquitetura e despacho}
+
+A biblioteca FastAPI publica o endpoint \texttt{POST /infer}. O corpo traz o texto do prompt e, quando a campanha precisa repetir o mesmo item, um identificador fixo. O endpoint \texttt{POST /v1/chat/completions} aceita o formato usual de conversa, extrai a última mensagem do usuário e segue o mesmo caminho. Nos dois casos, um eventual nome de modelo enviado pelo cliente é ignorado: o destino sai do classificador de prompts.
+
+O caminho tem quatro etapas.
+
+\begin{enumerate}
+    \item O serviço chama \texttt{classificar\_e\_registrar}, em \texttt{src/classificador.py}. Essa função grava a decisão no log e delega à função pura \texttt{classificar}, que devolve a classe, o nome do modelo no Ollama e o motivo da escolha. A regra desta entrega é a seguinte. Pedido curto e factual vai para o AILO-152M-v2. Pedido de código vai para o Qwen2.5-Coder-0.5B. Pedido longo ou de raciocínio vai para o Phi-3.5-mini. O despacho grava classe, modelo e motivo no log, para que a latência medida tenha explicação.
+    \item Um cliente escrito com \texttt{httpx} envia o prompt à API local do Ollama, em \texttt{POST /api/generate}, com o fluxo desligado, de modo que a resposta volte inteira. Há tempo-limite configurável. O relógio é \texttt{time.perf\_counter}, iniciado imediatamente antes do envio e parado quando a resposta chega ou quando a chamada falha. Esse intervalo é a latência de ponta a ponta daquela tentativa. Se o modelo não estiver em memória, o Ollama o carrega dentro da mesma chamada, e o tempo de carga entra na medida.
+    \item Se o modelo escolhido não responde, o mesmo prompt é enviado ao Phi-3.5-mini. Conta como falha o estouro de tempo, a queda da conexão, um erro HTTP ou um corpo vazio. O log registra o redirecionamento com o modelo escolhido, o modelo de reserva e o motivo da falha. Quando o classificador já havia escolhido o Phi-3.5-mini, não há segunda tentativa, para não contar a mesma falha duas vezes.
+    \item A resposta reúne o texto gerado, a classe, o motivo, o modelo escolhido, o modelo que de fato atendeu, a marca de redirecionamento e duas latências. Uma é a da chamada ao Ollama que produziu a resposta. A outra é o tempo total do despacho, da chegada do prompt até a resposta pronta, já com a classificação e, se houver, o redirecionamento.
+\end{enumerate}
+
+O endereço do Ollama e o modelo de reserva ficam em variável de ambiente. O nome devolvido pelo classificador precisa ser o mesmo tag que aparece em \texttt{ollama list}. O serviço não descarrega modelos: quem decide o que permanece em RAM é o próprio Ollama. Em máquina com pouca memória, a troca de modelo pode dominar a latência. O log deixa esse efeito visível, porque cada requisição indica o modelo chamado e se houve desvio para o Phi-3.5-mini.
+
 \section{Resultados}
 
 Consectetur quis cillum eu minim Lorem minim anim dolor et. Ut incididunt est enim Lorem commodo occaecat sunt nulla adipisicing fugiat. Quis amet nisi do deserunt laborum. Labore velit deserunt excepteur et velit adipisicing consectetur ipsum. Enim dolore eiusmod proident exercitation ullamco commodo veniam anim ad ut ullamco Lorem Lorem.
