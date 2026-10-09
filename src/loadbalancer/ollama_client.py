@@ -1,5 +1,6 @@
 """Cliente HTTP do Ollama, com timeout e latência de ponta a ponta."""
 
+import os
 import time
 
 import httpx
@@ -38,7 +39,7 @@ class OllamaClient:
         try:
             response = await self._client.post(
                 "/api/generate",
-                json={"model": model, "prompt": prompt, "stream": False},
+                json=_corpo_da_geracao(model, prompt),
             )
         except httpx.TimeoutException as exc:
             return OllamaCall(
@@ -125,6 +126,15 @@ class OllamaClient:
             if isinstance(item, dict) and item.get("name")
         ]
         return True, names, None
+
+
+def _corpo_da_geracao(model: str, prompt: str) -> dict:
+    """Monta o pedido. ``OLLAMA_NUM_PREDICT`` limita o tamanho só quando está definido."""
+    corpo: dict = {"model": model, "prompt": prompt, "stream": False}
+    limite = os.getenv("OLLAMA_NUM_PREDICT", "").strip()
+    if limite:
+        corpo["options"] = {"num_predict": int(limite)}
+    return corpo
 
 
 def _elapsed(started: float) -> float:

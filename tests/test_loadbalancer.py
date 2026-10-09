@@ -221,6 +221,30 @@ def test_cliente_mede_latencia_e_devolve_o_texto():
     assert result.status_code == 200
 
 
+def test_cliente_limita_tokens_quando_o_ambiente_pede(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode())
+        assert body["options"] == {"num_predict": 16}
+        return httpx.Response(200, json={"response": "ok"})
+
+    monkeypatch.setenv("OLLAMA_NUM_PREDICT", "16")
+
+    async def scenario():
+        client = OllamaClient(
+            "http://ollama.test",
+            timeout_s=3,
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            return await client.generate("phi3.5", "oi")
+        finally:
+            await client.aclose()
+
+    result = _run(scenario())
+    assert result.ok is True
+    assert result.text == "ok"
+
+
 def test_cliente_trata_timeout_como_falha():
     def handler(_request: httpx.Request) -> httpx.Response:
         raise httpx.TimeoutException("estouro")
