@@ -1,0 +1,202 @@
+[
+  {
+    "id": "S01",
+    "classe_esperada": "simples",
+    "prompt": "Qual é a capital da Austrália? Responda apenas com o nome da cidade."
+  },
+  {
+    "id": "S02",
+    "classe_esperada": "simples",
+    "prompt": "Qual é o símbolo químico do ouro? Responda apenas com o símbolo."
+  },
+  {
+    "id": "S03",
+    "classe_esperada": "simples",
+    "prompt": "Qual é o maior planeta do Sistema Solar? Responda com uma única palavra."
+  },
+  {
+    "id": "S04",
+    "classe_esperada": "simples",
+    "prompt": "Quem escreveu o romance Dom Casmurro? Responda apenas com o nome do autor."
+  },
+  {
+    "id": "S05",
+    "classe_esperada": "simples",
+    "prompt": "Em que ano as naus de Pedro Álvares Cabral chegaram ao Brasil? Responda apenas com o ano."
+  },
+  {
+    "id": "S06",
+    "classe_esperada": "simples",
+    "prompt": "Quantos lados tem um hexágono? Responda apenas com o número."
+  },
+  {
+    "id": "S07",
+    "classe_esperada": "simples",
+    "prompt": "Qual é a moeda oficial do Japão? Responda apenas com o nome da moeda."
+  },
+  {
+    "id": "S08",
+    "classe_esperada": "simples",
+    "prompt": "Quanto é 15 multiplicado por 12? Responda apenas com o número."
+  },
+  {
+    "id": "S09",
+    "classe_esperada": "simples",
+    "prompt": "Traduza para o inglês: \"Bom dia, tudo bem?\" Responda apenas com a tradução."
+  },
+  {
+    "id": "S10",
+    "classe_esperada": "simples",
+    "prompt": "Converta 2,5 quilômetros para metros. Responda apenas com o número."
+  },
+  {
+    "id": "S11",
+    "classe_esperada": "simples",
+    "prompt": "Classifique o sentimento da frase como positivo, negativo ou neutro: \"A entrega atrasou e o produto veio quebrado.\" Responda com uma palavra."
+  },
+  {
+    "id": "S12",
+    "classe_esperada": "simples",
+    "prompt": "Escreva o plural da palavra \"cidadão\". Responda apenas com a palavra."
+  },
+  {
+    "id": "S13",
+    "classe_esperada": "simples",
+    "prompt": "Ana tinha 12 balas, deu 5 para Pedro e ganhou 3 da mãe. Com quantas balas ela ficou? Responda apenas com o número."
+  },
+  {
+    "id": "S14",
+    "classe_esperada": "simples",
+    "prompt": "Reescreva de forma educada a frase \"Me passa o sal.\" Responda com uma única frase."
+  },
+  {
+    "id": "C01",
+    "classe_esperada": "codigo",
+    "prompt": "Escreva em Python uma função `maior(a, b)` que retorna o maior entre dois números. Exemplo: maior(3, 7) retorna 7. Retorne apenas o código."
+  },
+  {
+    "id": "C02",
+    "classe_esperada": "codigo",
+    "prompt": "Escreva em JavaScript uma função `contarVogais(texto)` que retorna quantas vogais (a, e, i, o, u, com ou sem acento) existem no texto. Exemplo: contarVogais(\"Olá, mundo\") retorna 4. Retorne apenas o código."
+  },
+  {
+    "id": "C03",
+    "classe_esperada": "codigo",
+    "prompt": "Escreva em Python uma função `fizzbuzz(n)` que retorna uma lista com os números de 1 a n, trocando múltiplos de 3 por \"Fizz\", múltiplos de 5 por \"Buzz\" e múltiplos de ambos por \"FizzBuzz\". Retorne apenas o código."
+  },
+  {
+    "id": "C04",
+    "classe_esperada": "codigo",
+    "prompt": "Escreva em Python uma função `eh_palindromo(texto: str) -> bool` que ignora maiúsculas, espaços, acentos e pontuação. Exemplo: eh_palindromo(\"Socorram-me, subi no ônibus em Marrocos\") retorna True. Retorne apenas o código."
+  },
+  {
+    "id": "C05",
+    "classe_esperada": "codigo",
+    "prompt": "Escreva uma consulta SQL que retorne os 5 clientes com maior valor total de compras no ano de 2025. Tabelas: clientes(id, nome) e pedidos(id, cliente_id, valor, data). Retorne id, nome e total, do maior para o menor, e inclua apenas clientes com ao menos 3 pedidos. Retorne apenas a consulta."
+  },
+  {
+    "id": "C06",
+    "classe_esperada": "codigo",
+    "prompt": "Escreva em C uma função `void inverter_palavras(char *s)` que inverte a ordem das palavras de uma string no próprio lugar, sem alocar memória adicional. Exemplo: \"um dois tres\" vira \"tres dois um\". Retorne apenas o código."
+  },
+  {
+    "id": "C07",
+    "classe_esperada": "codigo",
+    "prompt": "Corrija os dois bugs da função Python abaixo, que deveria retornar os 3 maiores valores distintos de uma lista, em ordem decrescente (ou menos de 3, se não houver tantos). Retorne apenas o código corrigido.\n\ndef top3(lista):\n    ordenada = sorted(lista)\n    resultado = []\n    for x in ordenada:\n        if x in resultado:\n            resultado.append(x)\n    return resultado[:3]"
+  },
+  {
+    "id": "C08",
+    "classe_esperada": "codigo",
+    "prompt": "Implemente em Python a classe `PilhaMin` com os métodos `push(x)`, `pop()`, `topo()` e `minimo()`, todos em tempo O(1). Levante IndexError quando a pilha estiver vazia. Exemplo: após push(3), push(1), push(2), minimo() retorna 1 e, após dois pop(), minimo() retorna 3. Retorne apenas o código."
+  },
+  {
+    "id": "C09",
+    "classe_esperada": "codigo",
+    "prompt": "Implemente em Python a classe `CacheLRU(capacidade)` com os métodos `get(chave)` (retorna -1 se ausente) e `put(chave, valor)`, ambos em tempo O(1), removendo o item menos recentemente usado quando a capacidade for excedida. Use dicionário e lista duplamente encadeada própria, sem OrderedDict. Retorne apenas o código."
+  },
+  {
+    "id": "C10",
+    "classe_esperada": "codigo",
+    "prompt": "Implemente em Python a função `menor_caminho(grafo, origem, destino)` com o algoritmo de Dijkstra. O grafo é um dicionário {no: [(vizinho, peso), ...]} com pesos não negativos. Retorne uma tupla (distância, caminho como lista de nós) ou (inf, []) se o destino for inalcançável. Use heapq. Retorne apenas o código."
+  },
+  {
+    "id": "C11",
+    "classe_esperada": "codigo",
+    "prompt": "Implemente em Python a função `avaliar(expr: str) -> float` que avalia expressões aritméticas com +, -, *, /, ^ (potência, associativa à direita), parênteses, números decimais e menos unário, respeitando a precedência, sem usar eval nem ast. Deve levantar ValueError para expressões malformadas e ZeroDivisionError na divisão por zero. Exemplo: avaliar(\"-2^2 + 3*(4-1)\") retorna 5.0. Retorne apenas o código."
+  },
+  {
+    "id": "C12",
+    "classe_esperada": "codigo",
+    "prompt": "Implemente em Java a classe genérica `FilaLimitada<T>`, thread-safe, com capacidade fixa, usando apenas `ReentrantLock` e `Condition` (sem `BlockingQueue` nem `synchronized`). Métodos: `put(T)` bloqueia se cheia, `take()` bloqueia se vazia, e `fechar()` faz `put` lançar exceção e `take` devolver os itens restantes e depois `null`. Evite perda de sinal e espera ocupada. Retorne apenas o código."
+  },
+  {
+    "id": "C13",
+    "classe_esperada": "codigo",
+    "prompt": "Escreva em Python um compilador e uma máquina virtual de pilha para uma mini-linguagem com variáveis inteiras, atribuição, `+ - * <`, `while`, `if/else` e `print`. A função `executar(codigo_fonte: str) -> list[str]` deve compilar para bytecode próprio, executá-lo e retornar as saídas de print. Exemplo: um programa que calcula o fatorial de 5 imprime 120. Inclua lexer, parser recursivo descendente, gerador de bytecode e VM. Retorne apenas o código."
+  },
+  {
+    "id": "X01",
+    "classe_esperada": "complexo",
+    "prompt": "Uma loja aumenta o preço de um produto em 20% e, na semana seguinte, dá 20% de desconto sobre o novo preço. O preço final ficou maior, menor ou igual ao original? Dê a resposta na primeira linha e mostre a conta em até 3 linhas."
+  },
+  {
+    "id": "X02",
+    "classe_esperada": "complexo",
+    "prompt": "Uma família tem dois filhos. Suponha que cada filho é menino ou menina com a mesma probabilidade, de forma independente. Sabendo que pelo menos um deles é menino, qual é a probabilidade de os dois serem meninos? Dê a fração na primeira linha e liste os casos considerados."
+  },
+  {
+    "id": "X03",
+    "classe_esperada": "complexo",
+    "prompt": "Quantos números inteiros de 1 a 1000 são divisíveis por 3 ou por 5, mas não por 15? Dê o valor na primeira linha e, depois, a contagem usada em até 4 linhas."
+  },
+  {
+    "id": "X04",
+    "classe_esperada": "complexo",
+    "prompt": "Em uma ilha, cavaleiros sempre dizem a verdade e mentirosos sempre mentem. Três moradores falam: A diz \"A e B são de tipos diferentes\"; B diz \"A é mentiroso\"; C diz \"A e B são do mesmo tipo\". Quem é cavaleiro e quem é mentiroso? Dê a resposta na primeira linha e verifique cada afirmação em uma linha."
+  },
+  {
+    "id": "X05",
+    "classe_esperada": "complexo",
+    "prompt": "Um projeto tem as tarefas (duração em dias; dependências): A (3; nenhuma), B (2; A), C (4; A), D (3; B), E (2; B e C), F (5; D e E), G (1; F). Qual é a duração mínima do projeto, qual é o caminho crítico e quantos dias de folga tem a tarefa D? Dê a resposta final na primeira linha e, depois, o início e o fim mais cedo de cada tarefa em até 8 linhas."
+  },
+  {
+    "id": "X06",
+    "classe_esperada": "complexo",
+    "prompt": "Quantos pares (a, b) de inteiros positivos com a ≤ b satisfazem 1/a + 1/b = 1/6? Dê o número na primeira linha e, depois, liste os pares e a fatoração usada, em até 6 linhas."
+  },
+  {
+    "id": "X07",
+    "classe_esperada": "complexo",
+    "prompt": "Dois jogadores escolhem simultaneamente. A escolhe Cima ou Baixo; B escolhe Esquerda ou Direita. Pagamentos (A, B): Cima/Esquerda = (5, 2); Cima/Direita = (0, 0); Baixo/Esquerda = (1, 1); Baixo/Direita = (2, 4). Encontre todos os equilíbrios de Nash, inclusive o de estratégias mistas, com as probabilidades e os pagamentos esperados. Dê a lista de equilíbrios na primeira linha."
+  },
+  {
+    "id": "X08",
+    "classe_esperada": "complexo",
+    "prompt": "Leia o relatório e responda. A rede Alfa tem três lojas. No 1º trimestre, a receita (em R$ mil) foi: Centro 480, Norte 350 e Sul 410. No 2º trimestre foi: Centro 528, Norte 420 e Sul 451, e o valor do Sul inclui R$ 15 mil da venda única de equipamentos antigos, que deve ser excluída de qualquer cálculo. A meta anual da rede é R$ 6.500 mil. Suponha que, no 3º e no 4º trimestres, cada loja some, sobre o trimestre anterior, a mesma variação absoluta que teve do 1º para o 2º. (a) Qual loja teve o maior crescimento percentual do 1º para o 2º trimestre? (b) A rede atingirá a meta anual? Mostre a receita anual de cada loja. Dê (a) e (b) na primeira linha."
+  },
+  {
+    "id": "X09",
+    "classe_esperada": "complexo",
+    "prompt": "Em um hospital, dois tratamentos foram comparados. Tratamento X: casos leves, 18 sucessos em 20; casos graves, 40 sucessos em 100. Tratamento Y: casos leves, 80 sucessos em 100; casos graves, 6 sucessos em 20. Um gestor concluiu: \"Y tem taxa de sucesso total bem maior, então Y é melhor\". Calcule as taxas por grupo e no total, diga se a conclusão do gestor está correta, identifique o fenômeno e explique qual tratamento é melhor e por quê. Dê a conclusão na primeira linha."
+  },
+  {
+    "id": "X10",
+    "classe_esperada": "complexo",
+    "prompt": "Quatro casas estão em fila, numeradas de 1 a 4 da esquerda para a direita. Cada casa tem uma cor diferente (vermelha, azul, verde, amarela), uma bebida diferente (café, chá, leite, suco) e um animal diferente (cachorro, gato, pássaro, peixe). Pistas: (1) o dono do cachorro mora imediatamente à esquerda da casa azul; (2) o dono do peixe mora imediatamente à esquerda de quem bebe chá; (3) o dono do pássaro mora ao lado da casa vermelha; (4) quem bebe chá mora ao lado do dono do pássaro; (5) a casa amarela é a casa 4; (6) quem bebe café mora imediatamente à esquerda da casa amarela; (7) o dono do pássaro mora ao lado de quem bebe leite. Em que casa está o peixe e qual é a cor e a bebida da casa 3? Dê a resposta na primeira linha."
+  },
+  {
+    "id": "X11",
+    "classe_esperada": "complexo",
+    "prompt": "Prove que existem infinitos números primos da forma 4k + 3. Escreva a demonstração completa e rigorosa em até 15 linhas e aponte onde você usa que o produto de números congruentes a 1 módulo 4 também é congruente a 1 módulo 4."
+  },
+  {
+    "id": "X12",
+    "classe_esperada": "complexo",
+    "prompt": "Uma conferência tem 6 palestras (P1 a P6) e 3 horários, com 2 salas: cada horário comporta exatamente 2 palestras. Restrições: P4 no horário 1; P6 no horário 2; P3 no horário 3; P2 em horário anterior ao de P3; P3 e P5 em horários diferentes; P1 e P3 em horários diferentes. Existe um cronograma válido? Responda Sim ou Não na primeira linha; se sim, apresente-o; se não, indique o menor conjunto de restrições incompatíveis e explique o conflito."
+  },
+  {
+    "id": "X13",
+    "classe_esperada": "complexo",
+    "prompt": "Você é o engenheiro responsável por um serviço de inferência que recebe 18 requisições por segundo (chegadas de Poisson) e é atendido por um único servidor de 20 requisições por segundo (tempos de serviço exponenciais). Um colega afirma: \"Trocar por dois servidores de 10 requisições por segundo cada, com fila única, dá a mesma latência média, pois a capacidade total é igual.\" Faça, nesta ordem: (1) calcule a utilização, o tempo médio na fila e o tempo médio total no sistema atual; (2) calcule os mesmos tempos para a proposta do colega; (3) diga se a afirmação é verdadeira e explique o resultado, inclusive se algum dos dois tempos melhora; (4) recomende uma ação para reduzir o tempo total com custo mínimo e justifique; (5) por fim, revise sua própria resposta e liste dois pontos em que ela pode estar errada ou incompleta. Dê o veredito sobre a afirmação na primeira linha."
+  }
+]
