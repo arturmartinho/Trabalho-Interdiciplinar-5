@@ -1,9 +1,31 @@
+# Python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .pytest_cache/
 .venv/
+venv/
+env/
 dist/
 build/
-kb/
+
+# Banco de dados local
 *.db
-*.egg-info/
+kb/
+
+# Ambiente
+.env
+.env.local
+
+# Resultados de experimento (não subir — são gerados localmente)
+resultados.csv
+resultados.metadados.json
+
+# Logs
+*.log
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
