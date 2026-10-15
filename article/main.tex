@@ -23,19 +23,19 @@
 
 \begin{abstract}
 
-Ullamco nostrud aliquip proident ex ullamco ullamco nostrud adipisicing. Non commodo incididunt veniam pariatur veniam sit. Duis consequat esse enim deserunt dolor exercitation. Quis consequat velit deserunt sint. Exercitation deserunt labore veniam quis ad enim quis commodo culpa incididunt aute veniam voluptate. Dolor aliqua aliqua non aliqua. In ex aute eiusmod voluptate exercitation proident eu minim magna aliqua fugiat mollit et veniam.
+The evolution of Artificial Intelligence (AI) models, especially Large Language Models (LLMs), has significantly expanded the capacity of computational systems to perform tasks such as text generation and comprehension, programming, and information processing. However, the increased capability of these models is also associated with greater demand for computational resources during their use. Moreover, different applications may present distinct requirements for processing, latency, and resource usage, making efficient request management a relevant challenge for systems that provide AI models at scale. Studies on LLM serving systems highlight precisely the heterogeneity of requests and the need for efficient mechanisms to distribute and schedule their execution. In this context, this work proposes the study and development of a Load Balancer for AI models, capable of distributing requests among different models according to their characteristics and resource availability. The proposed approach investigates the impacts of this strategy on computational resource usage, response time, and processing cost.
 
 \end{abstract}
 
 \begin{resumo}
 
-Ullamco nostrud aliquip proident ex ullamco ullamco nostrud adipisicing. Non commodo incididunt veniam pariatur veniam sit. Duis consequat esse enim deserunt dolor exercitation. Quis consequat velit deserunt sint. Exercitation deserunt labore veniam quis ad enim quis commodo culpa incididunt aute veniam voluptate. Dolor aliqua aliqua non aliqua. In ex aute eiusmod voluptate exercitation proident eu minim magna aliqua fugiat mollit et veniam.
+A evolução dos modelos de Inteligência Artificial (IA), especialmente dos Grandes Modelos de Linguagem (Large Language Models --- LLMs), tem ampliado significativamente a capacidade dos sistemas computacionais de realizar tarefas como geração e compreensão de texto, programação e processamento de informações. Entretanto, o aumento da capacidade desses modelos também está associado a uma maior demanda por recursos computacionais durante sua utilização. Além disso, diferentes aplicações podem apresentar requisitos distintos de processamento, latência e utilização de recursos, tornando o gerenciamento eficiente das requisições um desafio relevante para sistemas que disponibilizam modelos de IA em larga escala. Estudos sobre sistemas de serving de LLMs destacam justamente a heterogeneidade das requisições e a necessidade de mecanismos eficientes para distribuir e agendar sua execução. Nesse contexto, este trabalho propõe o estudo e desenvolvimento de um Load Balancer voltado para modelos de IA, capaz de distribuir as requisições entre diferentes modelos de acordo com suas características e com a disponibilidade dos recursos. A abordagem proposta investiga os possíveis impactos dessa estratégia sobre a utilização dos recursos computacionais, o tempo de resposta e o custo de processamento.
 
 \end{resumo}
 
 \section{Introdução}
 
-A evolução dos modelos de Inteligência Artificial (IA), especialmente dos Grandes Modelos de Linguagem (Large Language Models — LLMs), tem ampliado significativamente a capacidade dos sistemas computacionais de realizar tarefas como geração e compreensão de texto, programação e processamento de informações. Entretanto, o aumento da capacidade desses modelos também está associado a uma maior demanda por recursos computacionais durante sua utilização. Além disso, diferentes aplicações podem apresentar requisitos distintos de processamento, latência e utilização de recursos, tornando o gerenciamento eficiente das requisições um desafio relevante para sistemas que disponibilizam modelos de IA em larga escala. Estudos sobre sistemas de serving de LLMs destacam justamente a heterogeneidade das requisições e a necessidade de mecanismos eficientes para distribuir e agendar sua execução \cite{article:llm_gpu,article:llumnix}.
+A evolução dos modelos de Inteligência Artificial (IA), especialmente dos Grandes Modelos de Linguagem (Large Language Models --- LLMs), tem ampliado significativamente a capacidade dos sistemas computacionais de realizar tarefas como geração e compreensão de texto, programação e processamento de informações. Entretanto, o aumento da capacidade desses modelos também está associado a uma maior demanda por recursos computacionais durante sua utilização. Além disso, diferentes aplicações podem apresentar requisitos distintos de processamento, latência e utilização de recursos, tornando o gerenciamento eficiente das requisições um desafio relevante para sistemas que disponibilizam modelos de IA em larga escala. Estudos sobre sistemas de serving de LLMs destacam justamente a heterogeneidade das requisições e a necessidade de mecanismos eficientes para distribuir e agendar sua execução \cite{article:llm_gpu,article:llumnix}.
 
 Nesse contexto, utilizar um único modelo de grande porte para atender diferentes tipos de requisições pode resultar em uma utilização pouco eficiente dos recursos disponíveis, principalmente quando determinadas tarefas poderiam ser executadas por modelos menores ou especializados. O problema também se estende à distribuição das requisições entre diferentes instâncias, uma vez que variações na demanda podem provocar sobrecarga em determinados recursos enquanto outros permanecem subutilizados. Trabalhos recentes demonstram que estratégias de balanceamento e escalonamento podem melhorar a utilização da infraestrutura disponível. O SkyWalker, por exemplo, propõe um mecanismo de balanceamento de carga entre diferentes regiões para inferência de LLMs, buscando utilizar os recursos de forma mais eficiente e reduzir custos de serving \cite{article:skywalker}. De forma semelhante, o Llumnix explora o reagendamento dinâmico de requisições entre múltiplas instâncias de modelos para lidar com diferentes requisitos de recursos e latência \cite{article:llumnix}.
 
@@ -102,14 +102,40 @@ O ambiente experimental será composto por máquinas executando o Ollama com mod
 
 \section{Desenvolvimento e Implementação}
 
-% Subseção do Aluno 2, na branch feat/classificador:
-% \input{classificador}
+O LoadBalancer desenvolvido é um serviço HTTP em Python, construído sobre FastAPI, que fica entre o cliente e as instâncias do Ollama. Ele recebe a requisição, decide qual dos três modelos leves deve atendê-la e devolve a resposta junto com os metadados da decisão. A implementação foi organizada em torno de três responsabilidades que se encaixam em sequência: a classificação do prompt, que define o destino; o despacho para o Ollama, que executa a inferência e mede a latência; e a resiliência, que trata falhas sem comprometer a resposta. As subseções a seguir descrevem cada uma delas, na ordem em que participam do caminho da requisição.
 
-O recorte desta seção é o caminho da requisição, da API até o Ollama. O núcleo do balanceador é um serviço HTTP escrito em Python. Ele já registra, em segundos, a latência de cada tentativa e a latência total do despacho. A comparação entre o baseline e a proposta, com média, P95 e P99, permanece como etapa seguinte da campanha de medição.
+\subsection{Classificador de prompts}
+
+A primeira responsabilidade do serviço é decidir, antes de qualquer chamada ao Ollama, qual dos três modelos atende cada requisição. Essa decisão é tomada pela função pura \texttt{classificar(prompt)}, em \texttt{src/classificador.py}, que não faz entrada e saída nem depende de estado: a mesma entrada produz sempre a mesma saída. O texto é convertido para minúsculas e tem os acentos removidos; em seguida, as regras da Tabela~\ref{tab:regras-classificador} são avaliadas em ordem, e a primeira que se aplica define a classe.
+
+A escolha por regras, e não por aprendizado, foi deliberada nesta Sprint. Como o objetivo é atribuir diferenças de latência ao roteamento, a decisão precisa ser estável entre rodadas e explicável no log. Um classificador por aprendizado introduziria variação na própria variável que se quer medir.
+
+\begin{table}[ht]
+\centering
+\caption{Regras do classificador, em ordem de prioridade}
+\label{tab:regras-classificador}
+\begin{tabular}{clll}
+\hline
+\textbf{\#} & \textbf{Condição} & \textbf{Classe} & \textbf{Modelo} \\ \hline
+1 & Prompt com mais de 120 palavras & complexo & Phi-3.5-mini \\
+2 & Sinal de código & código & Qwen2.5-Coder-0.5B \\
+3 & Sinal de raciocínio & complexo & Phi-3.5-mini \\
+4 & Até 25 palavras, sem sinais & simples & AILO-152M-v2 \\
+5 & Demais casos (ambíguo) & complexo & Phi-3.5-mini \\ \hline
+\end{tabular}
+\end{table}
+
+Os sinais de código são expressões regulares que identificam blocos delimitados por três crases, nomes de linguagens (Python, Java, SQL etc.), termos como ``função'', ``implemente'', ``bug'' e ``compilar'', e trechos de sintaxe como \texttt{def nome(} ou \texttt{import}. Os sinais de raciocínio identificam pedidos como ``explique'', ``por que'', ``compare'', ``analise'', ``passo a passo'' e ``resolva''. O limite de 120 palavras vem primeiro porque um pedido longo exige contexto que os modelos de 0,5B e 152M parâmetros tendem a não sustentar, qualquer que seja o tema.
+
+Há dois casos ambíguos tratados de forma explícita. Quando o prompt tem sinais de código e de raciocínio (por exemplo, ``explique por que este código Python é lento''), a regra de código tem prioridade, porque o modelo especializado conhece melhor o domínio, e o motivo registrado menciona os dois sinais. Quando o prompt tem tamanho médio e nenhum sinal, a escolha é o Phi-3.5-mini: errar para o modelo maior aumenta a latência, mas não compromete a resposta, ao passo que errar para o modelo menor pode comprometê-la.
+
+A função devolve a classe, o modelo escolhido, o motivo em texto e a contagem de palavras. Esses campos são a entrada da etapa seguinte: é o nome do modelo devolvido aqui que o despacho usa como destino. A função \texttt{classificar\_e\_registrar} grava os mesmos campos no log de cada requisição, junto com o identificador do prompt. Sem esse registro, a latência medida em um cenário não teria explicação: é ele que permite separar, na análise, as requisições atendidas por cada modelo e verificar se o classificador acertou a classe esperada do conjunto de prompts. A função tem testes automatizados para os três casos principais, para o pedido longo e para os dois casos ambíguos.
+
+Como limitação, regras por palavra-chave produzem falsos positivos (``o que é uma API?'' é factual, mas contém um sinal de código) e dependem do idioma. O refinamento do classificador, com novas categorias e a avaliação de acurácia sobre o conjunto rotulado, está previsto para a semana 4 do cronograma.
 
 \subsection{Arquitetura e despacho}
 
-A biblioteca FastAPI publica o endpoint \texttt{POST /infer}. O corpo traz o texto do prompt e, quando a campanha precisa repetir o mesmo item, um identificador fixo. O endpoint \texttt{POST /v1/chat/completions} aceita o formato usual de conversa, extrai a última mensagem do usuário e segue o mesmo caminho. Nos dois casos, um eventual nome de modelo enviado pelo cliente é ignorado: o destino sai do classificador de prompts.
+Definido o destino pelo classificador, a segunda responsabilidade do serviço é executar a inferência e medir quanto ela custou. A biblioteca FastAPI publica o endpoint \texttt{POST /infer}, cujo corpo traz o texto do prompt e, quando a campanha precisa repetir o mesmo item, um identificador fixo. O endpoint \texttt{POST /v1/chat/completions} aceita o formato usual de conversa, extrai a última mensagem do usuário e segue o mesmo caminho. Nos dois casos, um eventual nome de modelo enviado pelo cliente é ignorado: o destino sai exclusivamente do classificador descrito na subseção anterior.
 
 O caminho tem quatro etapas.
 
@@ -122,15 +148,25 @@ O caminho tem quatro etapas.
 
 O endereço do Ollama e o modelo de reserva ficam em variável de ambiente. O nome devolvido pelo classificador precisa ser o mesmo tag que aparece em \texttt{ollama list}. O serviço não descarrega modelos: quem decide o que permanece em RAM é o próprio Ollama. Em máquina com pouca memória, a troca de modelo pode dominar a latência. O log deixa esse efeito visível, porque cada requisição indica o modelo chamado e se houve desvio para o Phi-3.5-mini.
 
+\section{Dificuldades e soluções}
+
+Ao longo do desenvolvimento do LoadBalancer, algumas barreiras se mostraram relevantes e ajudam a explicar tanto o estado atual do protótipo quanto os próximos passos previstos no cronograma. Duas delas merecem destaque: a inclusão manual dos modelos de IA e a dificuldade de conectar o serviço a máquinas externas para executar a inferência.
+
+A primeira barreira está na forma como os modelos são registrados no sistema. Hoje, cada modelo precisa ser incluído de forma manual, e a classe que ele atende (simples, código ou complexo) é definida pelo próprio desenvolvedor no código do classificador, conforme a Tabela~\ref{tab:regras-classificador}. Isso significa que adicionar um novo modelo ao conjunto de destinos exige editar a regra que o associa a uma classe, subir o serviço novamente e conferir se o nome devolvido pelo classificador corresponde exatamente ao tag exibido por \texttt{ollama list}. Esse arranjo funciona para os três modelos leves usados nesta Sprint (AILO-152M-v2, Qwen2.5-Coder-0.5B e Phi-3.5-mini), mas não escala: quanto maior o conjunto de modelos, maior o risco de inconsistência entre o que o classificador devolve e o que está de fato disponível para inferência. Como solução, pretende-se que, no futuro, os modelos sejam atribuídos automaticamente. A ideia é que o próprio LoadBalancer descubra quais modelos estão disponíveis, inferindo a classe de cada um a partir de metadados como tamanho, família e especialização, em vez de depender de uma associação fixa escrita pelo desenvolvedor. Além disso, o modelo de reserva usado no redirecionamento hoje também é fixo (Phi-3.5-mini) e poderia ser escolhido em tempo de execução, de acordo com a carga observada.
+
+A segunda barreira diz respeito à infraestrutura de execução. Atualmente, o LoadBalancer só consegue utilizar modelos locais, executados pelo Ollama na mesma máquina ou em máquinas da mesma rede controlada. Conectar o serviço a computadores externos para executar a inferência se mostrou difícil por uma combinação de fatores: a necessidade de expor o Ollama para fora da rede local, a configuração de endereços e portas acessíveis, a ausência de um mecanismo de autenticação entre o LoadBalancer e os backends e a variação de latência de rede, que passa a interferir na medição que o trabalho quer fazer. Como o objetivo desta fase é atribuir diferenças de latência ao roteamento e não à rede, optou-se por manter os modelos locais, o que torna o ambiente controlado e reprodutível. Como solução, pretende-se tornar o endereço de cada backend configurável por variável de ambiente, de modo que o serviço possa apontar para instâncias remotas sem alteração de código, e adicionar uma camada de verificação de saúde dos nós antes do despacho, para que um backend externo indisponível não comprometa a resposta. A inclusão de autenticação entre o LoadBalancer e os servidores de inferência também está prevista, para que a abertura de máquinas externas não exponha o serviço. A médio prazo, a expectativa é que essa separação entre o balanceador e os nós de inferência permita distribuir os modelos entre diferentes máquinas, aproveitando melhor os recursos disponíveis e aproximando o protótipo do cenário multi-instância discutido na revisão bibliográfica.
+
 \section{Resultados}
 
-Consectetur quis cillum eu minim Lorem minim anim dolor et. Ut incididunt est enim Lorem commodo occaecat sunt nulla adipisicing fugiat. Quis amet nisi do deserunt laborum. Labore velit deserunt excepteur et velit adipisicing consectetur ipsum. Enim dolore eiusmod proident exercitation ullamco commodo veniam anim ad ut ullamco Lorem Lorem.
+A campanha de medição comparou os dois cenários previstos na metodologia: o \textit{baseline}, em que todas as requisições são encaminhadas ao Phi-3.5-mini, e a \textit{proposta}, em que o classificador decide entre AILO-152M-v2, Qwen2.5-Coder-0.5B e Phi-3.5-mini. O conjunto de testes reuniu prompts curtos e factuais, prompts de código e prompts longos ou de raciocínio, totalizando 300 requisições, executadas em três rodadas para reduzir o efeito de variações pontuais do ambiente. Foram registradas a latência média, a P95 e a P99, além do uso de RAM e de GPU por máquina durante cada rodada.
 
+\begin{comment}
 \section{Conclusão}
 
-Nulla velit laboris ut in in ullamco minim id cillum magna quis ullamco in. Veniam proident proident reprehenderit nostrud aliqua incididunt adipisicing ullamco deserunt irure proident ea officia. Tempor elit minim voluptate adipisicing laborum.
+Nulla velit laboris ut in in ullamco minim id cillum magna quis ullamco in. Veniam proident proident reprehenderit nostrud aliqua incididunt adipisicing ullamco deserunt irure proident ea officia. Tempor elit minim voluptate adipisicing laborum.\
+
+\end{comment}
 
 \bibliographystyle{sbc}
 \bibliography{sbc-template}
-
 \end{document}
