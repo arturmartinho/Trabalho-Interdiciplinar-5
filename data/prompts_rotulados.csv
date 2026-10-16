@@ -1,0 +1,74 @@
+id,prompt,classe_esperada
+s01,Qual é a capital da França?,simples
+s02,Quem escreveu Dom Casmurro?,simples
+s03,Em que ano o homem chegou à Lua?,simples
+s04,Quantos planetas tem o sistema solar?,simples
+s05,Qual é a fórmula química da água?,simples
+s06,Onde fica o Monte Everest?,simples
+s07,Quem pintou a Mona Lisa?,simples
+s08,Qual a moeda do Japão?,simples
+s09,Liste três países da América do Sul.,simples
+s10,Qual é o maior oceano do mundo?,simples
+s11,Quando começou a Segunda Guerra Mundial?,simples
+s12,Qual é a língua oficial do Brasil?,simples
+s13,Cite dois afluentes do rio Amazonas.,simples
+s14,Quantos ossos tem o corpo humano adulto?,simples
+s15,Qual o símbolo químico do ouro?,simples
+s16,Who wrote Hamlet?,simples
+s17,What is the capital of Australia?,simples
+s18,"Bom dia, tudo bem?",simples
+s19,Qual o plural de cidadão?,simples
+s20,Quem foi o primeiro presidente do Brasil?,simples
+s21,Qual é a velocidade da luz?,simples
+s22,O que é uma API?,simples
+s23,Defina fotossíntese em uma frase.,simples
+s24,Qual o ponto de ebulição da água ao nível do mar?,simples
+s25,Como se escreve exceção?,simples
+c01,Escreva uma função em Python que inverte uma string.,codigo
+c02,Como faço um loop for em JavaScript?,codigo
+c03,"Corrija o bug neste código: def soma(a, b): return a - b",codigo
+c04,Crie uma consulta SQL que retorna os clientes com mais de 3 pedidos.,codigo
+c05,O que significa o erro NullPointerException em Java?,codigo
+c06,Implemente uma pilha usando lista em Python.,codigo
+c07,Explique por que esse código Python fica lento com listas grandes.,codigo
+c08,Escreva um script bash que renomeia todos os arquivos .txt de uma pasta.,codigo
+c09,Qual a diferença entre let e const em JavaScript?,codigo
+c10,Refatore esta classe para usar injeção de dependência.,codigo
+c11,Write a function that checks if a number is prime.,codigo
+c12,Como criar um endpoint REST com FastAPI?,codigo
+c13,Faça uma regex que valide um e-mail.,codigo
+c14,Como centralizar uma div com CSS?,codigo
+c15,"print(sum([1, 2, 3])) retorna o quê?",codigo
+c16,Converta este trecho de Java para Kotlin: public int dobro(int x) { return x * 2; },codigo
+c17,"Meu programa em C++ não compila, o que pode ser?",codigo
+c18,Como ler um arquivo CSV com pandas?,codigo
+c19,Crie uma classe Pessoa em TypeScript com nome e idade.,codigo
+c20,Como fazer um select com join em SQL?,codigo
+c21,Escreva testes unitários com pytest para uma função de soma.,codigo
+c22,Debug this stack trace: TypeError: undefined is not a function,codigo
+c23,Implemente busca binária em Java.,codigo
+x01,Explique passo a passo por que o céu é azul.,complexo
+x02,Compare as vantagens e desvantagens da energia solar e da eólica.,complexo
+x03,Qual a diferença entre vírus e bactéria?,complexo
+x04,Escreva um poema sobre o mar.,complexo
+x05,Resuma a história da Revolução Francesa.,complexo
+x06,Por que a inflação aumenta quando os juros caem?,complexo
+x07,Analise os impactos da inteligência artificial no mercado de trabalho.,complexo
+x08,Crie um plano de estudos de quatro semanas para o ENEM.,complexo
+x09,Resolva a equação 2x + 3 = 11 e mostre os passos.,complexo
+x10,Avalie se vale a pena comprar um carro elétrico hoje no Brasil.,complexo
+x11,Quanto é 17% de 340?,complexo
+x12,Justifique a escolha da democracia como forma de governo.,complexo
+x13,Explain how vaccines train the immune system.,complexo
+x14,Descreva o ciclo da água.,complexo
+x15,"Traduza para o inglês: ""O conhecimento é a única riqueza que cresce quando compartilhada.""",complexo
+x16,Como funciona a fotossíntese?,complexo
+x17,Elabore um argumento a favor da semana de quatro dias de trabalho.,complexo
+x18,Quais são as causas da Primeira Guerra Mundial e como elas se relacionam?,complexo
+x19,"Estou organizando uma viagem com a família para o litoral no fim do ano e gostaria de sugestões de lugares tranquilos, com boa comida e que não sejam muito caros para ficar uma semana.",complexo
+x20,Me conte uma história curta sobre um robô que aprende a sentir.,complexo
+x21,Qual é a melhor estratégia para pagar dívidas com juros altos?,complexo
+x22,Calcule a área de um círculo de raio 5.,complexo
+x23,Proponha uma solução para o trânsito em grandes cidades.,complexo
+x24,Qual o sentido da vida?,complexo
+x25,Discuta os prós e contras do home office.,complexo

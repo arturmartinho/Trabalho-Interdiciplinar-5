@@ -1,9 +1,31 @@
 % Subseção do classificador de prompts (Aluno 2) -- incluir com \input{classificador}
 \subsection{Classificador de prompts}
 
-O classificador decide, antes do despacho, qual dos três modelos atende cada requisição. Nesta Sprint ele foi implementado por regras, e não por aprendizado, por dois motivos: a decisão precisa ser estável entre rodadas para que as diferenças de latência entre \textit{baseline} e proposta possam ser atribuídas ao roteamento, e cada decisão precisa ser explicável no log.
+O classificador decide, antes do despacho, qual dos três modelos atende cada requisição. Ele foi implementado por regras, e não por aprendizado, por dois motivos: a decisão precisa ser estável entre rodadas para que as diferenças de latência entre \textit{baseline} e proposta possam ser atribuídas ao roteamento, e cada decisão precisa ser explicável no log.
 
 A implementação é a função pura \texttt{classificar(prompt)}, em \texttt{src/classificador.py}. Ela não faz entrada e saída nem depende de estado: a mesma entrada produz sempre a mesma saída. O texto é convertido para minúsculas e tem os acentos removidos; em seguida, as regras da Tabela~\ref{tab:regras-classificador} são avaliadas em ordem, e a primeira que se aplica define a classe.
+
+\subsubsection{Nível cognitivo pela Taxonomia de Bloom}
+
+Para estimar quanto raciocínio um pedido exige, o classificador usa a Taxonomia de Bloom revisada, que ordena tarefas cognitivas em seis níveis: Lembrar, Entender, Aplicar, Analisar, Avaliar e Criar. Cada nível é reconhecido pelo verbo de comando do prompt (Tabela~\ref{tab:bloom}). Quando há verbos de mais de um nível, vale o mais alto; quando não há nenhum, o pedido é tratado como Lembrar. As formas no pretérito são ignoradas, porque indicam um fato e não uma tarefa: ``quem escreveu Dom Casmurro?'' é Lembrar, não Criar.
+
+\begin{table}[ht]
+\centering
+\caption{Níveis de Bloom e exemplos de sinais reconhecidos}
+\label{tab:bloom}
+\begin{tabular}{cll}
+\hline
+\textbf{Nível} & \textbf{Nome} & \textbf{Exemplos de sinais} \\ \hline
+1 & Lembrar & qual, quem, quando, liste, cite, defina \\
+2 & Entender & explique, descreva, resuma, traduza, por que, como funciona \\
+3 & Aplicar & resolva, calcule, converta, passo a passo, expressão aritmética \\
+4 & Analisar & compare, analise, diferença, relacione, prós e contras \\
+5 & Avaliar & avalie, justifique, argumente, discuta, qual é o melhor \\
+6 & Criar & crie, escreva, elabore, proponha, planeje, sugestões \\ \hline
+\end{tabular}
+\end{table}
+
+O limiar é o nível 2: apenas pedidos de nível Lembrar podem ir para o AILO-152M-v2. Um modelo de 152M parâmetros recupera fatos curtos, mas tende a não sustentar explicações. O limiar é configurável pela variável \texttt{LIMIAR\_BLOOM}.
 
 \begin{table}[ht]
 \centering
@@ -14,16 +36,41 @@ A implementação é a função pura \texttt{classificar(prompt)}, em \texttt{sr
 \textbf{\#} & \textbf{Condição} & \textbf{Classe} & \textbf{Modelo} \\ \hline
 1 & Prompt com mais de 120 palavras & complexo & Phi-3.5-mini \\
 2 & Sinal de código & código & Qwen2.5-Coder-0.5B \\
-3 & Sinal de raciocínio & complexo & Phi-3.5-mini \\
-4 & Até 25 palavras, sem sinais & simples & AILO-152M-v2 \\
+3 & Nível de Bloom $\geq 2$ & complexo & Phi-3.5-mini \\
+4 & Até 25 palavras, nível Lembrar & simples & AILO-152M-v2 \\
 5 & Demais casos (ambíguo) & complexo & Phi-3.5-mini \\ \hline
 \end{tabular}
 \end{table}
 
-Os sinais de código são expressões regulares que identificam blocos de código delimitados por três crases, nomes de linguagens (Python, Java, SQL etc.), termos como ``função'', ``implemente'', ``bug'' e ``compilar'', e trechos de sintaxe como \texttt{def nome(} ou \texttt{import}. Os sinais de raciocínio identificam pedidos como ``explique'', ``por que'', ``compare'', ``analise'', ``passo a passo'' e ``resolva''. O limite de 120 palavras vem primeiro porque um pedido longo exige contexto que os modelos de 0,5B e 152M parâmetros tendem a não sustentar, qualquer que seja o tema.
+Os sinais de código são expressões regulares que identificam blocos de código delimitados por três crases, nomes de linguagens (Python, Java, SQL etc.), termos como ``função'', ``implemente'', ``bug'' e ``compilar'', e trechos de sintaxe como \texttt{def nome(} ou \texttt{import}. O limite de 120 palavras vem primeiro porque um pedido longo exige contexto que os modelos de 0,5B e 152M parâmetros tendem a não sustentar, qualquer que seja o tema.
 
-Há dois casos ambíguos tratados de forma explícita. Quando o prompt tem sinais de código e de raciocínio (por exemplo, ``explique por que este código Python é lento''), a regra de código tem prioridade, porque o modelo especializado conhece melhor o domínio, e o motivo registrado menciona os dois sinais. Quando o prompt tem tamanho médio e nenhum sinal, a escolha é o Phi-3.5-mini: errar para o modelo maior aumenta a latência, mas não compromete a resposta, ao passo que errar para o modelo menor pode comprometê-la.
+Há dois casos ambíguos tratados de forma explícita. Quando o prompt tem sinais de código e um nível de Bloom alto (por exemplo, ``escreva uma função em Python'', que é Criar), a regra de código tem prioridade, porque o modelo especializado conhece melhor o domínio, e o motivo registrado menciona os dois sinais. Quando o prompt tem tamanho médio e nenhum sinal, a escolha é o Phi-3.5-mini: errar para o modelo maior aumenta a latência, mas não compromete a resposta, ao passo que errar para o modelo menor pode comprometê-la.
 
-A função devolve a classe, o modelo escolhido, o motivo em texto e a contagem de palavras. A função \texttt{classificar\_e\_registrar} grava esses campos no log de cada requisição, junto com o identificador do prompt. Sem esse registro, a latência medida em um cenário não teria explicação: é ele que permite separar, na análise, as requisições atendidas por cada modelo e verificar se o classificador acertou a classe esperada do conjunto de prompts. A função tem testes automatizados para os três casos principais, para o pedido longo e para os dois casos ambíguos.
+A função devolve a classe, o modelo escolhido, o nível de Bloom, o motivo em texto e a contagem de palavras. A função \texttt{classificar\_e\_registrar} grava esses campos no log de cada requisição, junto com o identificador do prompt. É esse registro que permite separar, na análise, as requisições atendidas por cada modelo e cruzar a latência com o nível cognitivo do pedido.
 
-Como limitação, regras por palavra-chave produzem falsos positivos (``o que é uma API?'' é factual, mas contém um sinal de código) e dependem do idioma. O refinamento do classificador, com novas categorias e a avaliação de acurácia sobre o conjunto rotulado, está previsto para a semana 4 do cronograma.
+\subsubsection{Avaliação}
+
+A versão anterior, com uma lista fixa de sinais de raciocínio, e a versão com a Taxonomia de Bloom foram comparadas em dois conjuntos de prompts rotulados manualmente. O conjunto A (\texttt{data/prompts\_rotulados.csv}) tem 73 prompts, 25 simples, 23 de código e 25 complexos, rotulados pelo critério de qual modelo responderia adequadamente ao pedido. O conjunto B (\texttt{src/resources/prompts.json}) tem os 40 prompts do experimento de latência, 14 simples, 13 de código e 13 complexos. O script \texttt{src/avaliar\_classificador.py} calcula, para qualquer um dos dois, a acurácia, a precisão e a revocação por classe e a matriz de confusão. A Tabela~\ref{tab:avaliacao-classificador} resume os resultados.
+
+\begin{table}[ht]
+\centering
+\caption{Acurácia do classificador nos dois conjuntos rotulados}
+\label{tab:avaliacao-classificador}
+\begin{tabular}{lccc}
+\hline
+\textbf{Conjunto} & \textbf{Prompts} & \textbf{Sinais fixos} & \textbf{Bloom} \\ \hline
+A & 73 & 78,1\% & 93,2\% \\
+B & 40 & 100,0\% & 92,5\% \\
+A e B juntos & 113 & 85,8\% & 92,9\% \\ \hline
+\end{tabular}
+\end{table}
+
+No conjunto A, o ganho vem quase todo da classe ``complexo'', cuja revocação passa de 44\% para 92\%. Na versão anterior, 14 dos 25 pedidos complexos eram curtos e não tinham nenhum dos sinais fixos (``escreva um poema'', ``qual a diferença entre vírus e bactéria?'', ``resuma a Revolução Francesa''), e por isso iam para o modelo de 152M. Com Bloom, esses pedidos são reconhecidos pelos verbos Criar, Analisar e Entender.
+
+No conjunto B, o efeito é o oposto: a versão com Bloom erra três pedidos simples que a anterior acertava. Os três usam um verbo de nível alto para uma tarefa trivial e restringem a resposta a uma palavra: ``traduza `bom dia, tudo bem?' \ldots{} responda apenas com a tradução'' (Entender), ``converta 2,5 quilômetros para metros \ldots{} responda apenas com o número'' (Aplicar) e ``escreva o plural da palavra `cidadão' \ldots{} responda apenas com a palavra'' (Criar). O verbo de comando, sozinho, superestima a dificuldade desses pedidos. O erro vai na direção conservadora, para o modelo maior, e por isso aumenta a latência sem comprometer a resposta.
+
+\subsubsection{Limitações}
+
+Além dos três casos do conjunto B, os cinco erros no conjunto A mostram os limites de regras por palavra-chave: ``o que é uma API?'' é factual, mas contém um sinal de código; ``como se escreve exceção?'' usa o verbo escrever sem pedir criação; ``como ler um CSV com pandas?'' é um pedido de código sem nenhum termo da lista; e ``me conte uma história'' e ``qual o sentido da vida?'' exigem raciocínio sem um verbo de Bloom reconhecido. As regras também dependem do idioma, cobrindo apenas português e inglês.
+
+Nenhum dos dois conjuntos é neutro. O conjunto A foi elaborado pelo mesmo autor das regras de Bloom, e o conjunto B, com conhecimento das regras anteriores; cada um tende a favorecer a versão que o acompanha. Por isso, a melhora da versão com Bloom no total dos 113 prompts é um indício, e não uma comprovação. Uma avaliação mais confiável exige um conjunto maior, escrito e rotulado por quem não conhece nenhuma das duas versões das regras. Como a versão com Bloom envia alguns prompts do conjunto B a um modelo diferente, os resultados de latência medidos com a versão anterior precisam ser coletados novamente caso ela seja adotada. A Taxonomia de Bloom também foi concebida para objetivos de aprendizagem humanos: o nível cognitivo de um pedido é um indicador, e não uma medida direta, da dificuldade que ele impõe a um modelo de linguagem.

@@ -399,13 +399,22 @@ Arquivo: `src/classificador.py`. Função pura `classificar(prompt)` — mesma e
 | 1 | Prompt vazio | `simples` | AILO |
 | 2 | Mais de **120 palavras** | `complexo` | Phi |
 | 3 | Sinal de **código** | `codigo` | Qwen |
-| 4 | Sinal de **raciocínio** | `complexo` | Phi |
-| 5 | Até **25 palavras**, sem sinais | `simples` | AILO |
+| 4 | Nível de **Bloom ≥ 2** | `complexo` | Phi |
+| 5 | Até **25 palavras**, nível Lembrar | `simples` | AILO |
 | 6 | Demais casos (ambíguo) | `complexo` | Phi |
 
+**Nível de Bloom:** o verbo de comando do prompt indica o nível cognitivo pela Taxonomia de Bloom revisada (1 Lembrar, 2 Entender, 3 Aplicar, 4 Analisar, 5 Avaliar, 6 Criar). Vale o maior nível encontrado; sem verbo, o nível é 1. Verbos no pretérito são ignorados ("Quem escreveu…?" é Lembrar). O limiar é configurável por `LIMIAR_BLOOM` no `.env` (padrão `2`).
+
 **Casos ambíguos tratados:**
-- Código + raciocínio → **código tem prioridade** (o modelo especializado conhece melhor o domínio)
+- Código + Bloom alto → **código tem prioridade** (o modelo especializado conhece melhor o domínio)
 - Tamanho médio sem sinais → **Phi** (errar pro maior aumenta latência, mas não compromete a resposta)
+
+**Avaliar a acurácia** sobre um conjunto rotulado (CSV ou JSON com `id`, `prompt` e `classe_esperada`):
+
+```bash
+python src/avaliar_classificador.py                              # data/prompts_rotulados.csv (73 prompts)
+python src/avaliar_classificador.py src/resources/prompts.json   # conjunto do experimento (40 prompts)
+```
 
 ---
 
