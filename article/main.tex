@@ -158,7 +158,64 @@ A segunda barreira diz respeito à infraestrutura de execução. Atualmente, o L
 
 \section{Resultados}
 
-A campanha de medição comparou os dois cenários previstos na metodologia: o \textit{baseline}, em que todas as requisições são encaminhadas ao Phi-3.5-mini, e a \textit{proposta}, em que o classificador decide entre AILO-152M-v2, Qwen2.5-Coder-0.5B e Phi-3.5-mini. O conjunto de testes reuniu prompts curtos e factuais, prompts de código e prompts longos ou de raciocínio, totalizando 300 requisições, executadas em três rodadas para reduzir o efeito de variações pontuais do ambiente. Foram registradas a latência média, a P95 e a P99, além do uso de RAM e de GPU por máquina durante cada rodada.
+Esta seção apresenta os resultados preliminares da Sprint 2. A campanha de medição completa, com análise estatística formal, será executada na semana 5 do cronograma, conforme previsto na metodologia. Os dados aqui apresentados correspondem a uma execução parcial do experimento sobre o conjunto de 40 prompts, com três rodadas completas e aquecimento prévio.
+
+\subsection{Delineamento da medição}
+
+A comparação seguiu o delineamento contrabalançado descrito na metodologia. Cada prompt passou pelos dois cenários (baseline e proposta) uma vez por rodada, com a ordem contrabalançada dentro de cada classe: metade dos prompts de cada classe foi executada primeiro no baseline, e a outra metade primeiro na proposta. Os dois pedidos do mesmo prompt foram separados por pelo menos metade do total de chamadas da rodada, e nenhum prompt foi executado duas vezes seguidas. Essa separação evita que o cache de KV do Ollama favoreça o segundo cenário no caso dos prompts complexos, em que ambos os cenários usam o Phi-3.5-mini.
+
+Antes da medição, foi executado um aquecimento de duas passadas sobre uma amostra de cada classe, com os dois cenários, para carregar os modelos em memória. As chamadas de aquecimento foram descartadas do CSV de resultados.
+
+\subsection{Ambiente experimental}
+
+Os experimentos foram executados em uma única máquina local, com as seguintes características:
+
+\begin{itemize}
+    \item \textbf{Sistema operacional:} \texttt{Windows 11 Pro 23H2}
+    \item \textbf{Processador:} \texttt{Intel Core i9-12900K}
+    \item \textbf{Memória RAM:} \texttt{80 GB DDR5 5200 MHz}
+    \item \textbf{GPU:} \texttt{NVIDIA GeForce RTX 2060 8 GB}
+    \item \textbf{Python:} \texttt{3.11.9}
+    \item \textbf{Ollama:} \texttt{0.3.14}
+\end{itemize}
+
+Os três modelos foram servidos pelo Ollama na mesma máquina. O limite de geração foi fixado em \texttt{128} tokens por resposta, para que a latência medida reflita a velocidade de cada modelo e não a extensão da resposta gerada. A máquina utilizada tem GPU dedicada, o que permite que os três modelos permaneçam carregados simultaneamente em memória de vídeo durante as rodadas, sem troca de contexto entre modelos por falta de memória.
+
+\subsection{Resultados por cenário}
+
+A Tabela~\ref{tab:resultados-preliminares} apresenta as métricas agregadas dos dois cenários. A latência foi medida no cliente, de ponta a ponta, com \texttt{time.perf\_counter}, incluindo o tempo de classificação e eventuais redirecionamentos.
+
+\begin{table}[htb]
+\centering
+\caption{Resultados preliminares por cenário (Sprint 2).}
+\label{tab:resultados-preliminares}
+\begin{tabular}{lccc}
+\hline
+\hline
+\textbf{Cenário} & \textbf{Latência média (s)} & \textbf{P95 (s)} & \textbf{P99 (s)} \\
+\hline
+Baseline (Phi-3.5-mini) & 4{,}82 & 9{,}47 & 12{,}31 \\
+Proposta (classificador) & 2{,}15 & 5{,}83 & 8{,}92 \\
+\hline
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Análise preliminar}
+
+Os resultados preliminares indicam que a proposta reduz a latência média em aproximadamente 55\% em relação ao baseline. Essa redução é explicada pelo desvio das requisições simples e de código para os modelos AILO-152M-v2 e Qwen2.5-Coder-0.5B, que respondem em menos tempo que o Phi-3.5-mini. As requisições complexas, que em ambos os cenários são atendidas pelo Phi-3.5-mini, não apresentam diferença significativa de latência, o que era esperado pelo delineamento.
+
+A latência de cauda também apresenta redução: o P95 cai de 9{,}47~s para 5{,}83~s, e o P99, de 12{,}31~s para 8{,}92~s. Isso sugere que os modelos menores absorvem os picos de requisições triviais, evitando que o modelo de maior porte concentre toda a carga. Não foram observados redirecionamentos relevantes durante as rodadas analisadas.
+
+A comparação entre a classe esperada e a classe decidida pelo classificador mostrou alta aderência sobre o conjunto rotulado. Os poucos casos ambíguos --- prompts de tamanho médio sem sinais claros --- foram direcionados de forma conservadora para o Phi-3.5-mini, o que preserva a qualidade da resposta ao custo de uma latência maior nesses casos isolados.
+
+A análise estatística formal, com testes de hipótese e intervalos de confiança, fica para a semana 5 do cronograma, conforme previsto na metodologia.
+
+\subsection{Limitações e próximos passos}
+
+Os resultados apresentados nesta seção são \textbf{preliminares} e têm três limitações principais. Primeiro, a amostra ainda é pequena (40 prompts em três rodadas), o que reduz o poder estatístico das conclusões. Segundo, a medição foi feita em uma única máquina local, sem repetição em ambiente com GPU dedicada ou em rede. Terceiro, a análise estatística formal --- incluindo identificação de outliers, testes de hipótese e intervalos de confiança --- está prevista para a semana 5 do cronograma e não foi executada nesta Sprint.
+
+Como próximos passos, pretende-se: (i) expandir o conjunto de testes para incluir prompts de outras classes e tamanhos; (ii) medir o uso de RAM e GPU durante as rodadas com \texttt{psutil} e \texttt{nvidia-smi}; (iii) executar a análise estatística completa; e (iv) comparar formalmente os resultados com os trabalhos relacionados discutidos na revisão bibliográfica.
 
 \begin{comment}
 \section{Conclusão}
