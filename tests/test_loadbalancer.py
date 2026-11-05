@@ -19,8 +19,15 @@ class FakeClient:
         self._results = list(results)
         self.calls: list[tuple[str, str]] = []
 
-    async def generate(self, model: str, prompt: str) -> OllamaCall:
+    async def generate(
+        self,
+        model: str,
+        prompt: str,
+        base_url: str | None = None,
+    ) -> OllamaCall:
         self.calls.append((model, prompt))
+        self.urls = getattr(self, "urls", [])
+        self.urls.append(base_url)
         return self._results.pop(0)
 
 
@@ -61,6 +68,23 @@ def test_despacho_usa_o_modelo_do_classificador():
     assert result.response.startswith("def soma")
     assert result.attempt_latency_s == 0.2
     assert result.e2e_latency_s >= 0
+
+
+def test_despacho_usa_a_url_registrada_para_o_modelo():
+    client = FakeClient([OllamaCall(ok=True, latency_s=0.2, text="ok")])
+
+    _run(
+        dispatch(
+            "escreva uma função",
+            classifier=_classify_code,
+            client=client,
+            fallback_model="phi3.5",
+            model_urls={"qwen2.5-coder:0.5b": "http://192.168.0.10:11434"},
+            request_id="req-url",
+        )
+    )
+
+    assert client.urls == ["http://192.168.0.10:11434"]
 
 
 def test_despacho_redireciona_quando_o_modelo_nao_responde():
@@ -219,6 +243,33 @@ def test_cliente_mede_latencia_e_devolve_o_texto():
     assert result.text == "olá"
     assert result.latency_s >= 0
     assert result.status_code == 200
+
+
+def test_cliente_usa_a_base_url_do_modelo_remoto():
+    vistos: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        vistos.append(str(request.url))
+        return httpx.Response(200, json={"response": "ok"})
+
+    async def scenario():
+        client = OllamaClient(
+            "http://ollama.test",
+            timeout_s=3,
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            return await client.generate(
+                "phi3.5",
+                "oi",
+                base_url="http://remoto.test:11434",
+            )
+        finally:
+            await client.aclose()
+
+    result = _run(scenario())
+    assert result.ok is True
+    assert vistos == ["http://remoto.test:11434/api/generate"]
 
 
 def test_cliente_limita_tokens_quando_o_ambiente_pede(monkeypatch):

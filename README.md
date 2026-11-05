@@ -1,6 +1,6 @@
 # TI5 — Load Balancer para Modelos de IA
 
-Roteamento de requisições por complexidade entre modelos de IA de diferentes portes, servidos via [Ollama](https://ollama.com/).
+Roteamento de requisições por complexidade entre modelos de IA de diferentes portes, servidos via [Ollama](https://ollama.com/). O projeto reúne, em uma única CLI, o catálogo de modelos, o classificador de prompts, o serviço de balanceamento e os experimentos.
 
 **Integrantes:**
 - Artur Fernandes Braga de Menezes
@@ -21,18 +21,48 @@ Sistemas de IA em produção costumam enviar **toda** requisição — simples o
 
 Este projeto propõe um **Load Balancer** que:
 
-1. **Classifica** cada prompt pela complexidade (regras determinísticas);
-2. **Encaminha** para o modelo mais adequado entre três:
+1. **Mantém um catálogo** de modelos locais e remotos, com a classe que cada um atende;
+2. **Classifica** cada prompt pela complexidade (regras determinísticas);
+3. **Encaminha** para o modelo mais adequado entre os registrados:
    - `AILO-152M-v2` → prompts **simples** (curtos, factuais)
    - `Qwen2.5-Coder-0.5B` → prompts de **código**
    - `Phi-3.5-mini` → prompts **complexos** (longos ou de raciocínio)
-3. **Mede** latência, uso de RAM/GPU e registra cada decisão.
+4. **Mede** latência e registra cada decisão;
+5. **Executa e analisa** os experimentos baseline × proposta.
 
 **Lacuna explorada:** os trabalhos relacionados (SAL, Llumnix, SkyWalker, DualMap) balanceiam **réplicas do mesmo modelo**. Nenhum classifica a complexidade do prompt para escolher entre **modelos de portes diferentes**.
 
 ---
 
-## 🏗️ Arquitetura
+## 🏗️ Arquitetura em camadas
+
+O código segue uma separação simples em camadas, com uma única porta de entrada:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Apresentação / CLI                                          │
+│   python -m src ...   (ou ai-lb ...)                        │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+┌───────────────────────────▼─────────────────────────────────┐
+│ Aplicação / serviço                                         │
+│   Classificador · Despacho · API FastAPI · Cliente Ollama   │
+│   src/classificador.py · src/loadbalancer/                  │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+┌───────────────────────────▼─────────────────────────────────┐
+│ Domínio / catálogo                                          │
+│   AIModelDM (modelo, tipo, status, URL e classe)            │
+│   src/ai_model.py                                           │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+┌───────────────────────────▼─────────────────────────────────┐
+│ Dados                                                       │
+│   SQLite (ai_models) · src/data_access.py                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+O **load balancer consulta o catálogo** (`AIModelDM`) para descobrir qual tag atende cada classe. Se uma classe ainda não tiver modelo ativo no banco, ele usa a tag correspondente do `.env` como fallback.
 
 ```
 Cliente
@@ -42,12 +72,10 @@ Cliente
 ┌──────────────────────────────────┐
 │   Load Balancer (FastAPI)        │
 │                                  │
-│  1. Classificador (regras)       │
-│     └─ decide o modelo           │
-│  2. Despacho                     │
-│     └─ chama o Ollama via httpx  │
-│  3. Fallback                     │
-│     └─ se falhar, vai pro Phi    │
+│  1. Catálogo → classe → modelo   │
+│  2. Classificador (regras)       │
+│  3. Despacho via httpx           │
+│  4. Fallback se o modelo falhar  │
 └──────────────────────────────────┘
    │
    │ POST /api/generate
@@ -62,31 +90,36 @@ Cliente
 
 ```
 .
-├── article/                # Artigo SBC (.tex, .pdf)
-├── docs/                   # Documentação auxiliar
-├── presentation/           # Slides da Sprint 2
-├── experiments/            # Scripts e dados do experimento
+├── article/                 # Artigo SBC (.tex, .pdf)
+├── docs/                    # Cronograma e seções auxiliares
+├── presentation/            # Slides
+├── experiments/             # Scripts e dados do experimento
 │   ├── rodar_experimento.py
+│   ├── analisar.py
 │   ├── prompts.json
-│   └── resultados.csv      # (gerado ao rodar)
+│   └── executar_rodada.sh
 ├── src/
-│   ├── loadbalancer/       # Núcleo do Load Balancer
-│   │   ├── api.py          # Endpoints FastAPI
-│   │   ├── dispatcher.py   # Classifica + despacha + fallback
-│   │   ├── ollama_client.py# Cliente httpx do Ollama
-│   │   ├── schemas.py      # Contratos (dataclasses)
-│   │   ├── settings.py     # Configuração via .env
-│   │   ├── __init__.py
-│   │   └── __main__.py     # `python -m src.loadbalancer`
-│   ├── classificador.py    # Classificador por regras
-│   ├── log.py              # Logging colorido
-│   ├── ai_model.py         # Modelos (legado / menu)
-│   ├── data_access.py      # Acesso SQLite (legado / menu)
-│   ├── menu.py             # Menu CLI (legado)
-│   └── calculadora.py      # Exemplo / teste inicial
-├── tests/                  # Testes automatizados
-├── .env.example            # Modelo do .env
-├── .gitignore
+│   ├── __main__.py          # `python -m src`
+│   ├── cli.py               # CLI unificada (models, serve, infer, ...)
+│   ├── ai_model.py          # Catálogo de modelos (camada de domínio)
+│   ├── data_access.py       # SQLite (camada de dados)
+│   ├── classificador.py     # Classificador por regras
+│   ├── log.py               # Logging colorido
+│   └── loadbalancer/
+│       ├── api.py           # Endpoints FastAPI
+│       ├── dispatcher.py    # Classifica + despacha + fallback
+│       ├── ollama_client.py # Cliente httpx do Ollama
+│       ├── registry.py      # Ponte catálogo ↔ load balancer
+│       ├── schemas.py       # Contratos (dataclasses)
+│       └── settings.py      # Configuração via .env
+├── tests/
+│   ├── test_cli.py
+│   ├── test_classificador.py
+│   ├── test_loadbalancer.py
+│   ├── test_loadbalancer_integracao.py
+│   └── test_loadbalancer_ollama_real.py
+├── .env.example
+├── CHANGELOG.md
 ├── pyproject.toml
 ├── requirements.txt
 └── README.md
@@ -106,11 +139,11 @@ Cliente
   ```
 - **~4 GB de RAM livre** (para os três modelos pequenos)
 
-> 💡 Confira os nomes das tags com `ollama list`. Eles precisam bater com as variáveis `MODELO_*` no `.env`.
+> 💡 Confira os nomes das tags com `ollama list`. Eles precisam bater com o que for registrado na CLI.
 
 ---
 
-## 🚀 Como executar
+## 🚀 Instalação
 
 ### 1. Clonar o repositório
 
@@ -143,8 +176,18 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-> Isso instala o pacote em modo editável + as dependências de desenvolvimento (pytest).
-> Alternativa: `pip install -r requirements.txt`
+Para rodar os experimentos (gráficos e métricas de RAM), instale também o extra:
+
+```bash
+pip install -e ".[dev,experiments]"
+```
+
+Alternativa sem instalação editável:
+
+```bash
+pip install -r requirements.txt
+pip install -r requirements-experiments.txt
+```
 
 ### 4. Configurar o `.env`
 
@@ -154,7 +197,7 @@ cp .env.example .env
 
 Edite o `.env` conforme sua máquina. Os valores padrão já funcionam para uso local com Ollama.
 
-### 5. Subir o Ollama com os três modelos
+### 5. Subir o Ollama
 
 Em um terminal separado:
 
@@ -162,64 +205,101 @@ Em um terminal separado:
 ollama serve
 ```
 
-E, em outro:
+---
+
+## 🖥️ CLI unificada
+
+Tudo é acessível por `python -m src <comando>` (ou pelo atalho `ai-lb <comando>` depois de `pip install -e .`).
 
 ```bash
-ollama pull Alieno/ailo-152m-v2
-ollama pull qwen2.5-coder:0.5b
-ollama pull phi3.5
+python -m src --help
+python -m src models --help
 ```
 
-> Confirme com `ollama list` que os três aparecem.
+| Comando | O que faz |
+|---|---|
+| `models list` | Lista os modelos registrados |
+| `models register` | Registra um modelo manualmente (sem testar a conexão) |
+| `models host` | Baixa/instala e sobe um modelo local no Ollama |
+| `models connect` | Conecta a um modelo remoto e valida a URL |
+| `models update` | Atualiza o status (ping) de um modelo ou de todos |
+| `models stop` / `models resume` | Descarrega / recarrega um modelo local |
+| `models call` | Envia um prompt direto a um modelo do catálogo |
+| `models remove` | Remove um modelo do catálogo |
+| `classify` | Mostra a classe e o modelo escolhido para um prompt |
+| `infer` | Executa uma inferência pelo load balancer |
+| `serve` | Sobe a API HTTP do load balancer |
+| `experiment` | Roda baseline + proposta e grava `resultados.csv` |
+| `analyze` | Gera métricas, gráficos e relatório a partir do CSV |
 
-### 6. Subir o Load Balancer
+### Registrar os três modelos
+
+A classe (`--role`) é o que liga cada modelo ao roteamento. Use `simples`, `codigo`, `complexo` e `reserva` (fallback).
 
 ```bash
-python -m src.loadbalancer
+# Modelos locais já baixados: registra o status como "up"
+python -m src models register --name Alieno/ailo-152m-v2 --type local --role simples  --status up
+python -m src models register --name qwen2.5-coder:0.5b  --type local --role codigo   --status up
+python -m src models register --name phi3.5              --type local --role complexo --status up
+python -m src models register --name phi3.5              --type local --role reserva  --status up
 ```
 
-O serviço sobe em `http://127.0.0.1:8000`. Confira em:
+Se preferir que a CLI instale/baixe e suba o modelo no Ollama:
+
+```bash
+python -m src models host --name phi3.5 --role complexo
+```
+
+Para apontar para uma instância remota:
+
+```bash
+python -m src models connect --name phi3.5 --url http://192.168.0.10:11434 --role complexo
+```
+
+> **Precedência do roteamento:** modelo ativo no catálogo (`status=up`) para a classe → tag `MODELO_*` do `.env`. O fallback usa o modelo com `role=reserva`; se não houver, usa `FALLBACK_MODEL`.
+>
+> O catálogo também define o **endereço do backend**: um modelo registrado com `--url` é chamado nessa URL, e os modelos locais usam `OLLAMA_HOST`. Assim, `models connect` não serve apenas para listar — o load balancer despacha de fato para o nó remoto.
+>
+> O classificador resolve o catálogo na primeira requisição. Depois de registrar ou trocar um modelo, reinicie `python -m src serve`.
+
+### Subir o load balancer
+
+```bash
+python -m src serve
+# ou: python -m src serve --host 0.0.0.0 --port 8000
+```
+
+O serviço sobe em `http://127.0.0.1:8000`. Confira:
 
 ```bash
 curl http://127.0.0.1:8000/health
 ```
 
-Resposta esperada:
-```json
-{
-  "ok": true,
-  "ollama_host": "http://127.0.0.1:11434",
-  "fallback_model": "phi3.5",
-  "expected_models": ["Alieno/ailo-152m-v2", "qwen2.5-coder:0.5b", "phi3.5"],
-  "models": ["Alieno/ailo-152m-v2", "qwen2.5-coder:0.5b", "phi3.5"],
-  "error": null
-}
-```
+> O alias legado `python -m src.loadbalancer` continua funcionando.
 
-### 7. Testar manualmente
+### Testar uma inferência pela CLI
 
-**Prompt simples** (deve ir pro AILO):
+Modo direto (não exige o `serve`; usa o mesmo despacho internamente):
+
 ```bash
-curl -X POST http://127.0.0.1:8000/infer \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "Qual é a capital da França?", "prompt_id": "teste-1"}'
+python -m src infer --prompt "Qual é a capital da França?" --prompt-id teste-1
 ```
 
-**Prompt de código** (deve ir pro Qwen):
+Contra um load balancer já em execução:
+
 ```bash
-curl -X POST http://127.0.0.1:8000/infer \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "Escreva uma função em Python que inverte uma string.", "prompt_id": "teste-2"}'
+python -m src infer --url http://127.0.0.1:8000 --prompt "Escreva uma função em Python"
 ```
 
-**Prompt complexo** (deve ir pro Phi):
+Use `--json` para ver classe, modelo escolhido, modelo que atendeu, redirecionamento e latências.
+
+### Classificar sem executar o modelo
+
 ```bash
-curl -X POST http://127.0.0.1:8000/infer \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "Explique passo a passo por que o céu é azul.", "prompt_id": "teste-3"}'
+python -m src classify --prompt "Explique passo a passo por que o céu é azul." --json
 ```
 
-### 8. Rodar os testes
+### Rodar os testes
 
 ```bash
 pytest
@@ -228,88 +308,10 @@ pytest
 Para rodar apenas os testes que **não precisam** do Ollama:
 
 ```bash
-pytest tests/test_classificador.py tests/test_loadbalancer.py
+pytest tests/test_classificador.py tests/test_loadbalancer.py tests/test_cli.py
 ```
 
----
-
-## 🧪 Como reproduzir o experimento
-
-O experimento compara **dois cenários** sobre o mesmo conjunto de prompts:
-
-| Cenário | Descrição |
-|---------|-----------|
-| **Baseline** | Toda requisição vai para o `Phi-3.5-mini` |
-| **Proposta** | O classificador decide o modelo |
-
-### Passo a passo
-
-1. **Confirme que o Ollama e o Load Balancer estão no ar** (passos 5 e 6 acima).
-2. **Rode o script**:
-   ```bash
-   cd experiments
-   python rodar_experimento.py --repeticoes 3 --aquecimento 2
-   ```
-3. **Saída esperada**:
-   - `experiments/resultados.csv` — uma linha por requisição
-   - `experiments/resultados.metadados.json` — ambiente, versões, config
-
-### Argumentos do script
-
-| Argumento | Padrão | Descrição |
-|-----------|--------|-----------|
-| `--repeticoes` | 1 | Número de rodadas completas por cenário |
-| `--aquecimento` | 2 | Passadas descartadas (carrega os modelos em RAM) |
-| `--seed` | 42 | Semente da ordem dos prompts (reprodutibilidade) |
-| `--anexar` | false | Permite acrescentar a um CSV existente |
-| `--prompts` | `prompts.json` | Caminho do conjunto de prompts |
-| `--saida` | `resultados.csv` | Caminho do CSV de saída |
-
-### Delineamento
-
-Para evitar viés de ordem, o script:
-- Executa o mesmo prompt nos **dois cenários**, uma vez cada por rodada;
-- **Contrabalança** quem vai primeiro (metade baseline, metade proposta, dentro de cada classe);
-- Separa os dois pedidos do mesmo prompt por ≥ n/2 chamadas;
-- Faz **aquecimento** antes de medir, descartando essas chamadas.
-
-### Formato do CSV
-
-O arquivo `resultados.csv` tem as seguintes colunas:
-
-| Coluna | Descrição |
-|--------|-----------|
-| `timestamp` | Momento UTC da medição |
-| `rodada` | Número da rodada |
-| `passo` | 1 = primeiro cenário da rodada; 2 = o outro |
-| `ordem_exec` | Ordem de execução dentro da rodada |
-| `cenario` | `baseline` ou `proposta` |
-| `prompt_id` | ID do prompt (ex: `S01`, `C03`, `X07`) |
-| `classe_esperada` | `simples`, `codigo` ou `complexo` |
-| `classe` | Classe **decidida** pelo classificador (vazio no baseline) |
-| `modelo_escolhido` | Modelo que o classificador escolheu |
-| `modelo_atendeu` | Modelo que de fato respondeu (pode diferir se houve fallback) |
-| `desvio` | `true` se houve fallback |
-| `latencia_s` | Latência de ponta a ponta medida no cliente |
-| `lb_e2e_s` | Latência total reportada pelo Load Balancer |
-| `resposta_chars` | Tamanho da resposta em caracteres |
-| `sucesso` | `true` / `false` |
-| `erro` | Mensagem de erro, se houver |
-
-### Análise dos resultados
-
-Para gerar estatísticas (média, P95, P99) e gráficos, use um notebook ou script separado. Exemplo mínimo:
-
-```python
-import pandas as pd
-
-df = pd.read_csv("experiments/resultados.csv")
-df = df[df["sucesso"] == True]  # só requisições bem-sucedidas
-
-for cenario in ("baseline", "proposta"):
-    sub = df[df["cenario"] == cenario]["latencia_s"]
-    print(f"{cenario}: média={sub.mean():.3f}s  P95={sub.quantile(0.95):.3f}s  P99={sub.quantile(0.99):.3f}s")
-```
+Os testes de integração (`test_loadbalancer_integracao.py` e `test_loadbalancer_ollama_real.py`) sobem a API de verdade. O segundo é pulado automaticamente se o Ollama local não tiver os três modelos.
 
 ---
 
@@ -317,7 +319,7 @@ for cenario in ("baseline", "proposta"):
 
 ### `GET /health`
 
-Verifica se o serviço está pronto (Ollama acessível + modelos disponíveis).
+Verifica se o serviço está pronto (Ollama acessível + modelos esperados presentes).
 
 **Resposta 200** (ok):
 ```json
@@ -327,11 +329,15 @@ Verifica se o serviço está pronto (Ollama acessível + modelos disponíveis).
   "fallback_model": "phi3.5",
   "expected_models": ["Alieno/ailo-152m-v2", "qwen2.5-coder:0.5b", "phi3.5"],
   "models": ["Alieno/ailo-152m-v2", "qwen2.5-coder:0.5b", "phi3.5"],
+  "registered_models": [
+    {"id": 1, "name": "phi3.5", "type": "local", "status": "up", "role": "complexo", "url": ""}
+  ],
+  "missing_models": [],
   "error": null
 }
 ```
 
-**Resposta 503** (Ollama offline ou modelo faltando):
+**Resposta 503** (Ollama offline ou modelo esperado ausente):
 ```json
 { "ok": false, "error": "..." }
 ```
@@ -368,16 +374,10 @@ Recebe um prompt, classifica e encaminha.
 }
 ```
 
-**Resposta 502** (modelo escolhido e fallback falharam):
-```json
-{ "ok": false, "redirected": true, "served_model": "phi3.5", "response": null, "error": "..." }
-```
-
 ### `POST /v1/chat/completions`
 
 Compatível com o formato OpenAI (simplificado). O campo `model` é **ignorado** — quem decide é o classificador.
 
-**Request:**
 ```json
 {
   "messages": [
@@ -390,12 +390,12 @@ Compatível com o formato OpenAI (simplificado). O campo `model` é **ignorado**
 
 ## 🧠 Classificador de prompts
 
-Arquivo: `src/classificador.py`. Função pura `classificar(prompt)` — mesma entrada, mesma saída.
+Arquivo: `src/classificador.py`. Função pura `classificar(prompt, modelos=None)` — mesma entrada, mesma saída.
 
 **Regras (a primeira que casar decide):**
 
-| # | Condição | Classe | Modelo |
-|---|----------|--------|--------|
+| # | Condição | Classe | Modelo padrão |
+|---|----------|--------|---------------|
 | 1 | Prompt vazio | `simples` | AILO |
 | 2 | Mais de **120 palavras** | `complexo` | Phi |
 | 3 | Sinal de **código** | `codigo` | Qwen |
@@ -407,22 +407,93 @@ Arquivo: `src/classificador.py`. Função pura `classificar(prompt)` — mesma e
 - Código + raciocínio → **código tem prioridade** (o modelo especializado conhece melhor o domínio)
 - Tamanho médio sem sinais → **Phi** (errar pro maior aumenta latência, mas não compromete a resposta)
 
+O parâmetro opcional `modelos` permite substituir os destinos do `.env` pelos modelos registrados no catálogo. É assim que o load balancer usa o `ai_model`.
+
 ---
 
-## 🧪 Testes
+## 🧪 Experimentos
+
+O experimento compara **dois cenários** sobre o mesmo conjunto de prompts:
+
+| Cenário | Descrição |
+|---------|-----------|
+| **Baseline** | Toda requisição vai para o `Phi-3.5-mini` |
+| **Proposta** | O classificador decide o modelo |
+
+### Passo a passo
+
+1. Confirme que o Ollama e o load balancer estão no ar.
+2. Rode a coleta:
+
+   ```bash
+   python -m src experiment --repeticoes 3 --aquecimento 2
+   ```
+
+3. Gere a análise:
+
+   ```bash
+   python -m src analyze
+   ```
+
+   Saídas em `experiments/`:
+   - `resultados.csv` — uma linha por requisição
+   - `resultados.metadados.json` — ambiente, versões, config
+   - `relatorio_resultados.md` — relatório descritivo
+   - `graficos/` — gráficos comparativos
+
+Também é possível executar os scripts diretamente:
 
 ```bash
-pytest                                    # tudo
-pytest tests/test_classificador.py        # só o classificador
-pytest tests/test_loadbalancer.py         # só o LB (sem Ollama real)
-pytest -v                                 # verboso
+cd experiments
+python rodar_experimento.py --repeticoes 3 --aquecimento 2
+python analisar.py
 ```
 
-Os testes de integração (`test_api_integracao_real.py`) **só rodam se o Ollama estiver no ar** com os três modelos. Caso contrário, são pulados automaticamente.
+### Argumentos do experimento
+
+| Argumento | Padrão | Descrição |
+|-----------|--------|-----------|
+| `--repeticoes` | 1 | Número de rodadas completas por cenário |
+| `--aquecimento` | 2 | Passadas descartadas (carrega os modelos em RAM) |
+| `--seed` | 42 | Semente da ordem dos prompts (reprodutibilidade) |
+| `--anexar` | false | Permite acrescentar a um CSV existente |
+| `--prompts` | `prompts.json` | Caminho do conjunto de prompts |
+| `--saida` | `resultados.csv` | Caminho do CSV de saída |
+
+### Delineamento
+
+Para evitar viés de ordem, o script:
+- Executa o mesmo prompt nos **dois cenários**, uma vez cada por rodada;
+- **Contrabalança** quem vai primeiro (metade baseline, metade proposta, dentro de cada classe);
+- Separa os dois pedidos do mesmo prompt por ≥ n/2 chamadas;
+- Faz **aquecimento** antes de medir, descartando essas chamadas.
+
+### Formato do CSV
+
+| Coluna | Descrição |
+|--------|-----------|
+| `timestamp` | Momento UTC da medição |
+| `rodada` | Número da rodada |
+| `passo` | 1 = primeiro cenário da rodada; 2 = o outro |
+| `ordem_exec` | Ordem de execução dentro da rodada |
+| `cenario` | `baseline` ou `proposta` |
+| `prompt_id` | ID do prompt (ex: `S01`, `C03`, `X07`) |
+| `classe_esperada` | `simples`, `codigo` ou `complexo` |
+| `classe` | Classe **decidida** pelo classificador (vazio no baseline) |
+| `modelo_escolhido` | Modelo que o classificador escolheu |
+| `modelo_atendeu` | Modelo que de fato respondeu (pode diferir se houve fallback) |
+| `desvio` | `true` se houve fallback |
+| `latencia_s` | Latência de ponta a ponta medida no cliente |
+| `lb_e2e_s` | Latência total reportada pelo Load Balancer |
+| `resposta_chars` | Tamanho da resposta em caracteres |
+| `sucesso` | `true` / `false` |
+| `erro` | Mensagem de erro, se houver |
 
 ---
 
 ## 🗓️ Cronograma
+
+O cronograma completo está em [`docs/schedule.md`](docs/schedule.md).
 
 | Semana | Atividade |
 |--------|-----------|
@@ -444,6 +515,7 @@ Os testes de integração (`test_api_integracao_real.py`) **só rodam se o Ollam
 - **Artigo (Overleaf):** *(adicionar link)*
 - **Apresentação (Slides):** `presentation/main.pptx`
 - **GitHub Classroom:** *(adicionar link)*
+- **Changelog:** [`CHANGELOG.md`](CHANGELOG.md)
 
 ---
 

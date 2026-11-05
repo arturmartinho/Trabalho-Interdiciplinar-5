@@ -6,12 +6,35 @@ import requests
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 
-import log
-from data_access import DataModel
+from . import log
+from .data_access import DataModel
 
 load_dotenv()
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+
+# Classes usadas pelo load balancer. "reserva" é o fallback.
+ROLES = ("simples", "codigo", "complexo", "reserva", "geral")
+_ROLE_ALIASES = {
+    "código": "codigo",
+    "codigo": "codigo",
+    "code": "codigo",
+    "simples": "simples",
+    "simple": "simples",
+    "complexo": "complexo",
+    "complex": "complexo",
+    "reserva": "reserva",
+    "fallback": "reserva",
+    "geral": "geral",
+    "general": "geral",
+}
+
+
+def normalize_role(role: Optional[str]) -> str:
+    """Normaliza a classe informada pelo usuário."""
+    value = (role or "").strip().lower()
+    return _ROLE_ALIASES.get(value, value)
+
 
 class AIModelDM(DataModel):
     """Represents an AI model (local or remote)."""
@@ -22,6 +45,7 @@ class AIModelDM(DataModel):
         "type": "TEXT NOT NULL",    # 'local' | 'remote'
         "status": "TEXT NOT NULL",  # 'up' | 'down'
         "url": "TEXT",
+        "role": "TEXT",             # 'simples' | 'codigo' | 'complexo' | 'reserva' | 'geral'
     }
 
     def __init__(
@@ -30,6 +54,7 @@ class AIModelDM(DataModel):
         type: str,
         status: str = "down",
         url: str = "",
+        role: Optional[str] = "",
         id: Optional[int] = None,
     ):
         self.id = id
@@ -37,14 +62,16 @@ class AIModelDM(DataModel):
         self.type = type
         self.status = status
         self.url = url
+        self.role = normalize_role(role)
 
     # ------------------------------------------------------------------ #
     # Display
     # ------------------------------------------------------------------ #
     def display(self) -> str:
         """Return a human-readable string of the model."""
-        icon = "🟢" if self.status == "up" else "🔴"
-        return f"{self.id}. {icon} {self.name} | {self.type} | {self.status}"
+        icon = "[up]" if self.status == "up" else "[down]"
+        role = self.role or "-"
+        return f"{self.id}. {icon} {self.name} | {self.type} | {self.status} | {role}"
 
     def __repr__(self) -> str:
         return self.display()
@@ -63,6 +90,58 @@ class AIModelDM(DataModel):
     def list_objects(cls) -> List["AIModelDM"]:
         """Return list of AIModelDM objects from the DB."""
         return [cls(**row) for row in cls.list()]
+
+    @classmethod
+    def get(cls, id: Optional[int] = None, name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Find one model by id or name."""
+        if id is not None:
+            return super().read({"id": id}, many=False)
+        if name:
+            row = super().read({"name": name}, many=False)
+            if row:
+                return row
+            base = name.split(":")[0]
+            for candidate in super().read(many=True):
+                if candidate and candidate["name"].split(":")[0] == base:
+                    return candidate
+        return None
+
+    # ------------------------------------------------------------------ #
+    # Register (manual / CLI)
+    # ------------------------------------------------------------------ #
+    @classmethod
+    def register(
+        cls,
+        name: str,
+        type_: str = "local",
+        url: str = "",
+        role: Optional[str] = "",
+        status: str = "down",
+    ) -> bool:
+        """Register (or update) a model without contacting it.
+
+        Use :meth:`host` or :meth:`connect` when the model should also be
+        installed/started or validated over the network.
+        """
+        if not name.strip():
+            log.error("Model name cannot be empty.")
+            return False
+        if type_ not in ("local", "remote"):
+            log.error(f"Invalid model type: {type_} (use 'local' or 'remote').")
+            return False
+        if status not in ("up", "down"):
+            log.error(f"Invalid status: {status} (use 'up' or 'down').")
+            return False
+
+        cls._upsert(
+            name=name.strip(),
+            type_=type_,
+            status=status,
+            url=url.strip(),
+            role=normalize_role(role),
+        )
+        log.success(f"AI model '{name}' registered as {type_}/{status}.")
+        return True
 
     # ------------------------------------------------------------------ #
     # Update status
@@ -121,7 +200,7 @@ class AIModelDM(DataModel):
     # Host (local)
     # ------------------------------------------------------------------ #
     @classmethod
-    def host(cls, name: str) -> bool:
+    def host(cls, name: str, role: Optional[str] = "") -> bool:
         """Host an AI model locally via Ollama.
 
         Only one local model can be 'up' at a time: any other local model
@@ -129,10 +208,12 @@ class AIModelDM(DataModel):
         """
         log.info(f"Hosting local AI model: {name}")
 
-        row = super().read({"name": name, "type": "local"}, False)
+        row = super().read({"name": name, "type": "local", "status": "up"}, many=False)
         if row:
-            log.warning(f"Model '{name}' id already being hosted")
-            return False
+            log.warning(f"Model '{name}' is already hosted")
+            if role:
+                super().update({"id": row["id"]}, {"role": normalize_role(role)})
+            return True
 
         # 1. Check ollama installed
         if not cls._is_ollama_installed():
@@ -162,7 +243,13 @@ class AIModelDM(DataModel):
             log.debug(f"Model '{name}' is running.")
 
         # 4. Persist
-        cls._upsert(name=name, type_="local", status="up", url=OLLAMA_HOST)
+        cls._upsert(
+            name=name,
+            type_="local",
+            status="up",
+            url=OLLAMA_HOST,
+            role=normalize_role(role),
+        )
         log.success(f"AI model '{name}' hosted locally.")
         return True
 
@@ -348,19 +435,20 @@ class AIModelDM(DataModel):
     # Connect (remote)
     # ------------------------------------------------------------------ #
     @classmethod
-    def connect(cls, name: str, url: str) -> bool:
-        """Connect to a remote AI model."""
-        row = super().read({"name": name, "type": "remote", "url": url}, False)
-        if row:
-            log.warning(f"Model '{name}' id already connected")
-            return False
-
+    def connect(cls, name: str, url: str, role: Optional[str] = "") -> bool:
+        """Connect to a remote AI model (idempotente)."""
         log.info(f"Connecting to remote AI model: {name} @ {url}")
         if not cls._ping(name, "remote", url):
             log.error(f"Could not connect to remote AI model '{name}' at {url}.")
             return False
 
-        cls._upsert(name=name, type_="remote", status="up", url=url)
+        cls._upsert(
+            name=name,
+            type_="remote",
+            status="up",
+            url=url,
+            role=normalize_role(role),
+        )
         log.success(f"Connected to remote AI model '{name}'.")
         return True
 
@@ -402,13 +490,31 @@ class AIModelDM(DataModel):
     # Internal helpers
     # ------------------------------------------------------------------ #
     @classmethod
-    def _upsert(cls, name: str, type_: str, status: str, url: str) -> None:
+    def _upsert(
+        cls,
+        name: str,
+        type_: str,
+        status: str,
+        url: str,
+        role: Optional[str] = None,
+    ) -> None:
         existing = super().read({"name": name, "type": type_}, many=False)
         if existing:
-            super().update({"id": existing["id"]}, {"type": type_, "status": status, "url": url})
+            updates = {"type": type_, "status": status, "url": url}
+            if role:
+                updates["role"] = role
+            super().update({"id": existing["id"]}, updates)
             log.debug(f"Updated AI model '{name}' in DB.")
         else:
-            super().create({"name": name, "type": type_, "status": status, "url": url})
+            super().create(
+                {
+                    "name": name,
+                    "type": type_,
+                    "status": status,
+                    "url": url,
+                    "role": role or "",
+                }
+            )
             log.debug(f"Inserted AI model '{name}' into DB.")
 
     @staticmethod

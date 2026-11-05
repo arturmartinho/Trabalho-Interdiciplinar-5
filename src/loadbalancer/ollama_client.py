@@ -24,6 +24,7 @@ class OllamaClient:
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
+        self._transport = transport
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=httpx.Timeout(timeout_s),
@@ -33,11 +34,35 @@ class OllamaClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def generate(self, model: str, prompt: str) -> OllamaCall:
-        """Chama o modelo. Qualquer falha vira ``ok=False``, sem exceção."""
+    async def generate(
+        self,
+        model: str,
+        prompt: str,
+        base_url: str | None = None,
+    ) -> OllamaCall:
+        """Chama o modelo. Qualquer falha vira ``ok=False``, sem exceção.
+
+        ``base_url`` permite usar o endereço registrado para um modelo
+        remoto; sem ele, vale o ``OLLAMA_HOST`` do cliente.
+        """
+        if base_url and base_url.rstrip("/") != self.base_url:
+            async with httpx.AsyncClient(
+                base_url=base_url.rstrip("/"),
+                timeout=httpx.Timeout(self.timeout_s),
+                transport=self._transport,
+            ) as client:
+                return await self._generate_with(client, model, prompt)
+        return await self._generate_with(self._client, model, prompt)
+
+    async def _generate_with(
+        self,
+        client: httpx.AsyncClient,
+        model: str,
+        prompt: str,
+    ) -> OllamaCall:
         started = time.perf_counter()
         try:
-            response = await self._client.post(
+            response = await client.post(
                 "/api/generate",
                 json=_corpo_da_geracao(model, prompt),
             )

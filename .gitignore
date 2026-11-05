@@ -20,6 +20,10 @@ kb/
 # Resultados de experimento (não subir — são gerados localmente)
 resultados.csv
 resultados.metadados.json
+relatorio_resultados.md
+experiments/graficos/
+experiments/anteriores/
+experiments/log_rodada.txt
 
 # Logs
 *.log

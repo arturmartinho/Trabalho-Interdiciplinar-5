@@ -4,7 +4,7 @@ from abc import ABC
 from typing import Any, Dict, List, Optional, Union
 from dotenv import load_dotenv
 
-import log
+from . import log
 
 load_dotenv()
 
@@ -41,10 +41,28 @@ class DataModel(ABC):
 
     @classmethod
     def _ensure_table(cls) -> None:
-        """Create the DB file and table if they don't exist."""
+        """Create the DB file and table if they don't exist.
+
+        Columns added to ``schema`` after the table was created are applied
+        through ``ALTER TABLE`` so existing local databases keep working.
+        """
         cols = ", ".join(f"{name} {ctype}" for name, ctype in cls.schema.items())
         with cls._connect() as conn:
             conn.execute(f"CREATE TABLE IF NOT EXISTS {cls.table_name} ({cols})")
+
+            existing = {
+                row["name"] for row in conn.execute(f"PRAGMA table_info({cls.table_name})")
+            }
+            for name, ctype in cls.schema.items():
+                if name in existing:
+                    continue
+                # SQLite only accepts a simple type when adding a column to a
+                # table that may already contain rows.
+                conn.execute(
+                    f"ALTER TABLE {cls.table_name} ADD COLUMN {name} {ctype.split()[0]}"
+                )
+                log.info(f"Column '{name}' added to '{cls.table_name}'.")
+
             conn.commit()
         log.debug(f"Table '{cls.table_name}' ready.")
 

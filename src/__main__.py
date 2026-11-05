@@ -1,4 +1,4 @@
-from menu import menu
+from src.cli import main
 
 if __name__ == "__main__":
-    menu()
+    raise SystemExit(main())

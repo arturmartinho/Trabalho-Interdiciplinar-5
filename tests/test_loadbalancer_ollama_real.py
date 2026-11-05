@@ -82,6 +82,8 @@ def _subir(porta: int, extra: dict | None = None):
     env.update(
         {
             "PYTHONUNBUFFERED": "1",
+            # Isola o catálogo do banco local usado pelo desenvolvedor.
+            "DB_FILE": str(Path(os.environ.get("TEMP", ".")) / f"lb-real-{porta}.db"),
             "OLLAMA_HOST": OLLAMA,
             "OLLAMA_TIMEOUT_SECONDS": "180",
             "OLLAMA_NUM_PREDICT": "32",

@@ -1,9 +1,4 @@
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-
-from classificador import (  # noqa: E402
+from src.classificador import (
     CLASSE_CODIGO,
     CLASSE_COMPLEXO,
     CLASSE_SIMPLES,
@@ -81,6 +76,15 @@ def test_ignora_acentos_e_maiusculas():
 def test_prompt_vazio_nao_quebra():
     r = classificar("")
     assert r.classe == CLASSE_SIMPLES
+
+
+def test_aceita_modelos_do_catalogo():
+    r = classificar(
+        "Qual é a capital da França?",
+        modelos={"simples": "meu-modelo-simples"},
+    )
+    assert r.classe == CLASSE_SIMPLES
+    assert r.modelo == "meu-modelo-simples"
 
 
 def test_registra_no_log(capsys):

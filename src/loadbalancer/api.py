@@ -6,16 +6,13 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from src.loadbalancer import registry
 from src.loadbalancer.dispatcher import dispatch, resolve_classifier
 from src.loadbalancer.ollama_client import OllamaClient
 from src.loadbalancer.schemas import ClassifierError
 from src.loadbalancer.settings import (
     API_HOST,
     API_PORT,
-    FALLBACK_MODEL,
-    MODEL_CODE,
-    MODEL_REASONING,
-    MODEL_SIMPLE,
     OLLAMA_HOST,
     OLLAMA_TIMEOUT_S,
 )
@@ -33,6 +30,11 @@ class ChatRequest(BaseModel):
     messages: list[dict]
     model: str | None = None
     prompt_id: str | None = None
+
+
+def _canonical_model(name: str) -> str:
+    """Compara tags ignorando o namespace e o sufixo ``:tag``."""
+    return name.split(":", 1)[0].strip().lower().split("/")[-1]
 
 
 def create_app(client: OllamaClient | None = None, classifier=None) -> FastAPI:
@@ -60,15 +62,20 @@ def create_app(client: OllamaClient | None = None, classifier=None) -> FastAPI:
     async def health() -> JSONResponse:
         ok, models, problem = await app.state.client.list_models()
         host = getattr(app.state.client, "base_url", OLLAMA_HOST)
+        expected = registry.expected_models()
+        present = {_canonical_model(name) for name in models}
+        missing = [name for name in expected if _canonical_model(name) not in present]
         body = {
-            "ok": ok,
+            "ok": ok and not missing,
             "ollama_host": host,
-            "fallback_model": FALLBACK_MODEL,
-            "expected_models": [MODEL_SIMPLE, MODEL_CODE, MODEL_REASONING],
+            "fallback_model": registry.fallback_model(),
+            "expected_models": expected,
             "models": models,
-            "error": problem,
+            "registered_models": registry.registered_models(),
+            "missing_models": missing,
+            "error": problem or (f"modelos ausentes no Ollama: {missing}" if missing else None),
         }
-        return JSONResponse(status_code=200 if ok else 503, content=body)
+        return JSONResponse(status_code=200 if body["ok"] else 503, content=body)
 
     @app.post("/infer")
     async def infer(body: InferenceRequest) -> JSONResponse:
@@ -94,13 +101,18 @@ async def _run(app: FastAPI, prompt: str, prompt_id: str | None) -> JSONResponse
         error(str(exc))
         return JSONResponse(status_code=503, content={"ok": False, "error": str(exc)})
 
+    fallback = registry.fallback_target()
+    model_urls = registry.model_urls()
+    model_urls.setdefault(fallback["name"], fallback["url"])
+
     try:
         result = await dispatch(
             prompt,
             classifier=classifier,
             client=app.state.client,
             prompt_id=prompt_id,
-            fallback_model=FALLBACK_MODEL,
+            fallback_model=fallback["name"],
+            model_urls=model_urls,
         )
     except ClassifierError as exc:
         error(f"classificador rejeitou o prompt: {exc}")
@@ -131,11 +143,12 @@ def _last_user_message(messages: list[dict]) -> str | None:
 app = create_app()
 
 
-def main() -> None:
+def main(host: str | None = None, port: int | None = None, reload: bool = False) -> None:
     import uvicorn
 
     uvicorn.run(
         "src.loadbalancer.api:app",
-        host=API_HOST,
-        port=API_PORT,
+        host=host or API_HOST,
+        port=port or API_PORT,
+        reload=reload,
     )

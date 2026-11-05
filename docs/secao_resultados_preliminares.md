@@ -17,11 +17,11 @@ Esta seção apresenta uma primeira comparação entre os dois cenários descrit
 | Baseline | [ ] |   [ ] | [ ] | [ ] |
 | Proposta | [ ] |   [ ] | [ ] | [ ] |
 
-![Latência média, P95 e P99 nos dois cenários](graficos/grafico1_latencia_geral.png)
+![Latência média, P95 e P99 nos dois cenários](../experiments/graficos/grafico1_latencia_geral.png)
 
 *Figura 1. Latência média, P95 e P99 nos dois cenários.*
 
-![Latência média por classe de prompt](graficos/grafico2_latencia_por_classe.png)
+![Latência média por classe de prompt](../experiments/graficos/grafico2_latencia_por_classe.png)
 
 *Figura 2. Latência média por classe de prompt.*
 

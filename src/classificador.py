@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
-import log
+from . import log
 
 load_dotenv()
 
@@ -115,15 +115,27 @@ def _sinais_encontrados(texto: str, padroes: List[re.Pattern]) -> List[str]:
     return achados
 
 
-def _resultado(classe: str, motivo: str, palavras: int) -> Classificacao:
-    return Classificacao(classe, MODELO_POR_CLASSE[classe], motivo, palavras)
+def _resultado(
+    classe: str,
+    motivo: str,
+    palavras: int,
+    modelos: Optional[Dict[str, str]] = None,
+) -> Classificacao:
+    mapa = MODELO_POR_CLASSE
+    if modelos:
+        mapa = {**MODELO_POR_CLASSE, **{k: v for k, v in modelos.items() if v}}
+    return Classificacao(classe, mapa[classe], motivo, palavras)
 
 
 # --------------------------------------------------------------------------- #
 # Classificador (função pura)
 # --------------------------------------------------------------------------- #
-def classificar(prompt: str) -> Classificacao:
+def classificar(prompt: str, modelos: Optional[Dict[str, str]] = None) -> Classificacao:
     """Classifica o prompt e escolhe o modelo.
+
+    ``modelos`` permite substituir os destinos vindos do ambiente pelos
+    modelos registrados no banco (classe -> tag do Ollama). Sem ele, a
+    função usa os padrões de ``MODELO_POR_CLASSE``.
 
     Ordem das regras (a primeira que casar decide):
       1. prompt vazio                       -> simples
@@ -137,13 +149,14 @@ def classificar(prompt: str) -> Classificacao:
     palavras = _contar_palavras(texto)
 
     if palavras == 0:
-        return _resultado(CLASSE_SIMPLES, "prompt vazio", palavras)
+        return _resultado(CLASSE_SIMPLES, "prompt vazio", palavras, modelos)
 
     if palavras > LIMITE_LONGO:
         return _resultado(
             CLASSE_COMPLEXO,
             f"pedido longo ({palavras} palavras > {LIMITE_LONGO})",
             palavras,
+            modelos,
         )
 
     codigo = _sinais_encontrados(texto, _RE_CODIGO)
@@ -153,13 +166,14 @@ def classificar(prompt: str) -> Classificacao:
         motivo = f"sinais de codigo: {', '.join(codigo[:3])}"
         if raciocinio:
             motivo += f" (tambem raciocinio: {', '.join(raciocinio[:3])}; codigo tem prioridade)"
-        return _resultado(CLASSE_CODIGO, motivo, palavras)
+        return _resultado(CLASSE_CODIGO, motivo, palavras, modelos)
 
     if raciocinio:
         return _resultado(
             CLASSE_COMPLEXO,
             f"sinais de raciocinio: {', '.join(raciocinio[:3])}",
             palavras,
+            modelos,
         )
 
     if palavras <= LIMITE_CURTO:
@@ -167,21 +181,27 @@ def classificar(prompt: str) -> Classificacao:
             CLASSE_SIMPLES,
             f"pedido curto ({palavras} palavras <= {LIMITE_CURTO}) sem sinais de codigo/raciocinio",
             palavras,
+            modelos,
         )
 
     return _resultado(
         CLASSE_COMPLEXO,
         f"ambiguo: {palavras} palavras, sem sinais; padrao conservador",
         palavras,
+        modelos,
     )
 
 
 # --------------------------------------------------------------------------- #
 # Classificação com registro em log
 # --------------------------------------------------------------------------- #
-def classificar_e_registrar(prompt: str, prompt_id: Optional[str] = None) -> Classificacao:
+def classificar_e_registrar(
+    prompt: str,
+    prompt_id: Optional[str] = None,
+    modelos: Optional[Dict[str, str]] = None,
+) -> Classificacao:
     """Classifica o prompt e registra classe, modelo e motivo no log."""
-    resultado = classificar(prompt)
+    resultado = classificar(prompt, modelos=modelos)
     ident = f"id={prompt_id} " if prompt_id is not None else ""
     log.info(
         f"[classificador] {ident}classe={resultado.classe} "

@@ -7,3 +7,6 @@ uvicorn>=0.32
 
 # Dependências de desenvolvimento
 pytest>=8.0
+
+# Experimentos (opcionais): veja requirements-experiments.txt
+# ou instale o extra: pip install -e ".[experiments]"

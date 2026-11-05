@@ -1,10 +1,8 @@
 """Despacho: classifica o prompt, chama o Ollama e aplica o fallback."""
 
 import inspect
-import sys
 import time
 import uuid
-from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from src.loadbalancer.schemas import Classification, ClassifierError, DispatchResult
@@ -19,6 +17,17 @@ def same_model(left: str, right: str) -> bool:
     return left.split(":", 1)[0].strip().lower() == right.split(":", 1)[0].strip().lower()
 
 
+def _url_for_model(model: str, model_urls: dict[str, str] | None) -> str | None:
+    if not model_urls:
+        return None
+    if model in model_urls:
+        return model_urls[model]
+    for name, url in model_urls.items():
+        if same_model(name, model):
+            return url
+    return None
+
+
 async def dispatch(
     prompt: str,
     *,
@@ -26,6 +35,7 @@ async def dispatch(
     client: Any,
     prompt_id: str | None = None,
     fallback_model: str = FALLBACK_MODEL,
+    model_urls: dict[str, str] | None = None,
     request_id: str | None = None,
 ) -> DispatchResult:
     """Encaminha um prompt e devolve latências, modelo e eventual desvio.
@@ -47,7 +57,11 @@ async def dispatch(
         f"motivo={classification.reason or '-'}"
     )
 
-    first = await client.generate(classification.model, prompt)
+    first_url = _url_for_model(classification.model, model_urls)
+    if first_url:
+        first = await client.generate(classification.model, prompt, base_url=first_url)
+    else:
+        first = await client.generate(classification.model, prompt)
     redirected = False
     redirect_reason: str | None = None
     served_model = classification.model
@@ -63,7 +77,11 @@ async def dispatch(
             f"fallback={fallback_model} "
             f"motivo={redirect_reason}"
         )
-        final = await client.generate(fallback_model, prompt)
+        fallback_url = _url_for_model(fallback_model, model_urls)
+        if fallback_url:
+            final = await client.generate(fallback_model, prompt, base_url=fallback_url)
+        else:
+            final = await client.generate(fallback_model, prompt)
         served_model = fallback_model
     elif not first.ok:
         warning(
@@ -143,20 +161,24 @@ def _call_classifier(classifier: Classifier, prompt: str, prompt_id: str | None)
 
 
 def resolve_classifier() -> Classifier:
-    """Importa o classificador de ``src/classificador.py``.
+    """Monta o classificador com os destinos registrados no banco.
 
     A função usada no despacho é ``classificar_e_registrar``, que grava
-    classe, modelo e motivo. O módulo dela importa ``log`` como nome solto,
-    então a pasta ``src`` entra no caminho de importação.
+    classe, modelo e motivo. As classes sem modelo ativo no catálogo
+    continuam usando as tags do ambiente (``MODELO_*``).
     """
-    src_dir = str(Path(__file__).resolve().parents[1])
-    if src_dir not in sys.path:
-        sys.path.insert(0, src_dir)
     try:
-        from classificador import classificar_e_registrar
+        from src.classificador import classificar_e_registrar
+        from src.loadbalancer.registry import model_roles
     except ImportError as exc:
         raise ClassifierError(
             "Classificador não encontrado. "
             "Esperado: função classificar(prompt) em src/classificador.py."
         ) from exc
-    return classificar_e_registrar
+
+    modelos = model_roles()
+
+    def classifier(prompt: str, prompt_id: str | None = None):
+        return classificar_e_registrar(prompt, prompt_id=prompt_id, modelos=modelos)
+
+    return classifier

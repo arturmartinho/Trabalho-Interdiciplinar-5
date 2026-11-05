@@ -1,0 +1,4 @@
+# Dependências opcionais para rodar experiments/ e analisar resultados
+matplotlib>=3.8
+numpy>=1.26
+psutil>=5.9

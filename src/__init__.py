@@ -1,3 +1,3 @@
-from .calculadora import somar, subtrair
+"""Load Balancer de modelos de IA (CLI + serviço FastAPI)."""
 
-__all__ = ["somar", "subtrair"]
+__version__ = "0.2.0"

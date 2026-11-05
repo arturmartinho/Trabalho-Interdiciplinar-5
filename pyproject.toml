@@ -1,7 +1,11 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "ai-loadbalancer"
-version = "0.1.0"
-description = "Load balancer de modelos de IA servidos pelo Ollama."
+version = "0.2.0"
+description = "CLI e load balancer de modelos de IA servidos pelo Ollama."
 requires-python = ">=3.11"
 dependencies = [
     "python-dotenv",
@@ -11,11 +15,22 @@ dependencies = [
     "uvicorn>=0.32",
 ]
 
+[project.scripts]
+ai-lb = "src.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0"
 ]
+experiments = [
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+    "psutil>=5.9",
+]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
 
 [tool.pytest.ini_options]
-pythonpath = [".", "src"]
+pythonpath = ["."]
 testpaths = ["tests"]

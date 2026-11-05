@@ -124,6 +124,8 @@ def _esperar(url: str, timeout_s: float = 20) -> httpx.Response:
 def _subir_api(ollama_falso, porta: int, extra_env: dict | None = None):
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    # Isola o catálogo do banco local usado pelo desenvolvedor.
+    env["DB_FILE"] = str(Path(os.environ.get("TEMP", ".")) / f"lb-test-{porta}.db")
     env["OLLAMA_HOST"] = f"http://127.0.0.1:{ollama_falso.server_address[1]}"
     env["OLLAMA_TIMEOUT_SECONDS"] = "5"
     env["LOADBALANCER_HOST"] = "127.0.0.1"

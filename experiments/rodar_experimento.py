@@ -18,7 +18,7 @@ Delineamento de cada rodada (contrabalançado, para não favorecer nenhum cenár
     cenários usam o Phi, e rodar um logo após o outro favoreceria quem vai depois).
 
 Uso:
-  python rodar_experimento.py --repeticoes 3 --aquecimento 2
+  python -m src experiment --repeticoes 3 --aquecimento 2
 Pré-requisitos: Ollama no ar com os 3 modelos e o load balancer em 127.0.0.1:8000.
 """
 import argparse
@@ -168,7 +168,7 @@ def checar_prontidao(client):
     h = _get(client, f"{LB_URL}/health")
     if not h.get("ok"):
         sys.exit(f"ERRO: balancer não está pronto em {LB_URL}/health -> {h}\n"
-                 "Suba o balancer em outro terminal: python -m src.loadbalancer")
+                 "Suba o balancer em outro terminal: python -m src serve")
     if not _get(client, f"{OLLAMA}/api/tags").get("models"):
         sys.exit(f"ERRO: Ollama sem modelos ou fora do ar em {OLLAMA}")
     return h
