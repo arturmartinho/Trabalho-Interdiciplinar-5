@@ -38,52 +38,55 @@ Este projeto propõe um **Load Balancer** que:
 
 O código segue uma separação simples em camadas, com uma única porta de entrada:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│ Apresentação / CLI                                          │
-│   python -m src ...   (ou ai-lb ...)                        │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-┌───────────────────────────▼─────────────────────────────────┐
-│ Aplicação / serviço                                         │
-│   Classificador · Despacho · API FastAPI · Cliente Ollama   │
-│   src/classificador.py · src/loadbalancer/                  │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-┌───────────────────────────▼─────────────────────────────────┐
-│ Domínio / catálogo                                          │
-│   AIModelDM (modelo, tipo, status, URL e classe)            │
-│   src/ai_model.py                                           │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-┌───────────────────────────▼─────────────────────────────────┐
-│ Dados                                                       │
-│   SQLite (ai_models) · src/data_access.py                   │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph APRESENTACAO["Apresentação / CLI"]
+        CLI["python -m src ...<br/>(ou ai-lb ...)"]
+    end
+
+    subgraph APLICACAO["Aplicação / serviço"]
+        CLASS["Classificador<br/>src/classificador.py"]
+        LB["Despacho · API FastAPI · Cliente Ollama<br/>src/loadbalancer/"]
+    end
+
+    subgraph DOMINIO["Domínio / catálogo"]
+        DM["AIModelDM<br/>(modelo, tipo, status, URL e classe)<br/>src/ai_model.py"]
+    end
+
+    subgraph DADOS["Dados"]
+        SQL[("SQLite (ai_models)<br/>src/data_access.py")]
+    end
+
+    APRESENTACAO --> APLICACAO
+    APLICACAO --> DOMINIO
+    DOMINIO --> DADOS
 ```
 
 O **load balancer consulta o catálogo** (`AIModelDM`) para descobrir qual tag atende cada classe. Se uma classe ainda não tiver modelo ativo no banco, ele usa a tag correspondente do `.env` como fallback.
 
-```
-Cliente
-   │
-   │ POST /infer { prompt, prompt_id }
-   ▼
-┌──────────────────────────────────┐
-│   Load Balancer (FastAPI)        │
-│                                  │
-│  1. Catálogo → classe → modelo   │
-│  2. Classificador (regras)       │
-│  3. Despacho via httpx           │
-│  4. Fallback se o modelo falhar  │
-└──────────────────────────────────┘
-   │
-   │ POST /api/generate
-   ▼
-┌──────────────────────────────────┐
-│   Ollama (localhost:11434)       │
-│  AILO / Qwen-Coder / Phi-3.5     │
-└──────────────────────────────────┘
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Cliente
+    participant LB as Load Balancer<br/>(FastAPI)
+    participant CAT as Catálogo<br/>(AIModelDM)
+    participant CL as Classificador
+    participant OL as Ollama<br/>(localhost:11434)
+
+    C->>LB: POST /infer { prompt, prompt_id }
+    LB->>CAT: consulta modelo ativo por classe
+    CAT-->>LB: tag do modelo (ou fallback do .env)
+    LB->>CL: classificar(prompt)
+    CL-->>LB: classe (simples / codigo / complexo)
+    LB->>OL: POST /api/generate
+    alt Modelo responde
+        OL-->>LB: resposta
+    else Falha do modelo
+        LB->>CAT: busca modelo com role=reserva
+        LB->>OL: POST /api/generate (fallback)
+        OL-->>LB: resposta
+    end
+    LB-->>C: resposta + metadados (classe, modelo, latências)
 ```
 
 ### Estrutura de pastas
@@ -499,10 +502,10 @@ O cronograma completo está em [`docs/schedule.md`](docs/schedule.md).
 |--------|-----------|
 | 1 | Configuração do ambiente (Ollama, modelos leves) |
 | 2 | Classificador de prompts + versão inicial do Load Balancer |
-| **3 (Sprint 2)** | **Detalhamento da implementação + resultados preliminares + apresentação** |
+| 3 (Sprint 2) | Detalhamento da implementação + resultados preliminares + apresentação |
 | 4 | Refinamento do classificador + métricas + metodologia |
 | 5 | Experimentos comparativos + análise estatística |
-| 6 | Otimização + testes de roteamento + seção de resultados |
+| **6** | **Otimização + testes de roteamento + seção de resultados** |
 | 7 | Comparação com trabalhos relacionados |
 | 8 | Conclusões + revisão do artigo |
 | 9 (Sprint 3) | Pitch comercial + apresentação final |
@@ -512,10 +515,8 @@ O cronograma completo está em [`docs/schedule.md`](docs/schedule.md).
 
 ## 🔗 Links
 
-- **Artigo (Overleaf):** *(adicionar link)*
+- **Artigo (Overleaf):** [Overleaf](https://www.overleaf.com/read/qqddzsbybgfn#264ce0)
 - **Apresentação (Slides):** `presentation/main.pptx`
-- **GitHub Classroom:** *(adicionar link)*
-- **Changelog:** [`CHANGELOG.md`](CHANGELOG.md)
 
 ---
 
