@@ -181,8 +181,6 @@ def resolve_classifier() -> Classifier:
             "Esperado: função classificar(prompt) em src/classificador.py."
         ) from exc
 
-<<<<<<< HEAD
-=======
     modelos = model_roles()
     # Carrega tokenizador e modelo treinado agora, não na primeira requisição medida.
     estado = preparar()
@@ -198,7 +196,6 @@ def resolve_classifier() -> Classifier:
 
         return classifier_async
 
->>>>>>> feat/artur
     def classifier(prompt: str, prompt_id: str | None = None):
         # Relê o catálogo a cada chamada para refletir register/update sem reinício.
         return classificar_e_registrar(
