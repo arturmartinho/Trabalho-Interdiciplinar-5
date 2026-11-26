@@ -17,8 +17,16 @@ Delineamento de cada rodada (contrabalançado, para não favorecer nenhum cenár
     vezes seguidas. Assim o Ollama não reaproveita o cache do prompt anterior (nos complexos os dois
     cenários usam o Phi, e rodar um logo após o outro favoreceria quem vai depois).
 
+Modo carga (--concorrencia N, N > 1): em vez de uma requisição por vez, cada rodada roda dois
+blocos (um por cenário, ordem alternada entre rodadas), cada um com os mesmos prompts na mesma
+ordem embaralhada e N requisições simultâneas. Os cenários não se misturam no mesmo bloco, para
+que um não dispute CPU/GPU com o outro. Além da latência por requisição, os metadados guardam a
+duração de cada bloco e a vazão (requisições por segundo). No Ollama, o paralelismo real depende
+de OLLAMA_NUM_PARALLEL e OLLAMA_MAX_LOADED_MODELS no servidor.
+
 Uso:
   python -m src experiment --repeticoes 3 --aquecimento 2
+  python -m src experiment --prompts experiments/prompts_experimento.json --concorrencia 4
 Pré-requisitos: Ollama no ar com os 3 modelos e o load balancer em 127.0.0.1:8000.
 """
 import argparse
@@ -30,7 +38,9 @@ import random
 import shutil
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -53,6 +63,8 @@ COLUNAS = [
     "timestamp", "rodada", "passo", "ordem_exec", "cenario", "prompt_id", "classe_esperada", "classe",
     "modelo_escolhido", "modelo_atendeu", "desvio", "latencia_s", "lb_e2e_s",
     "resposta_chars", "sucesso", "erro",
+    # adicionadas depois; ficam no fim para não quebrar CSVs antigos
+    "concorrencia", "idioma", "subtipo", "linguagem",
 ]
 
 
@@ -93,7 +105,9 @@ def medir(cenario, client, item):
     return {"timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "cenario": cenario, "prompt_id": item["id"],
             "classe_esperada": item["classe_esperada"], **info,
-            "latencia_s": round(dt, 4), "sucesso": sucesso, "erro": erro}
+            "latencia_s": round(dt, 4), "sucesso": sucesso, "erro": erro,
+            "idioma": item.get("idioma", ""), "subtipo": item.get("subtipo", ""),
+            "linguagem": item.get("linguagem", "")}
 
 
 def planejar_rodada(prompts, rodada, seed, evitar_inicio=None):
@@ -114,6 +128,25 @@ def planejar_rodada(prompts, rodada, seed, evitar_inicio=None):
     outro = {"baseline": "proposta", "proposta": "baseline"}
     return ([(1, p, primeiro[p["id"]]) for p in passo1] +
             [(2, p, outro[primeiro[p["id"]]]) for p in passo2])
+
+
+def planejar_carga(prompts, rodada, seed):
+    """Modo carga: [(passo, cenario, [itens...]), ...], um bloco por cenário, mesma ordem nos dois."""
+    rng = random.Random(f"{seed}-carga-{rodada}")
+    ordem = prompts[:]
+    rng.shuffle(ordem)
+    cenarios = ("baseline", "proposta") if rodada % 2 == 1 else ("proposta", "baseline")
+    return [(passo, cenario, ordem) for passo, cenario in enumerate(cenarios, 1)]
+
+
+def rodar_bloco(client, itens, cenario, concorrencia, ao_terminar):
+    """Executa os itens com `concorrencia` requisições simultâneas; devolve a duração do bloco."""
+    t0 = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=concorrencia) as pool:
+        futuros = [(k, item, pool.submit(medir, cenario, client, item)) for k, item in enumerate(itens, 1)]
+        for k, item, fut in futuros:
+            ao_terminar(k, item, fut.result())
+    return time.perf_counter() - t0
 
 
 def _get(client, url):
@@ -182,7 +215,11 @@ def main():
     ap.add_argument("--aquecimento", type=int, default=2, help="passadas descartadas")
     ap.add_argument("--seed", type=int, default=42, help="ordem dos prompts (mesma nos 2 cenários)")
     ap.add_argument("--anexar", action="store_true", help="permite acrescentar a um CSV existente")
+    ap.add_argument("--concorrencia", type=int, default=1,
+                    help="requisições simultâneas (1 = delineamento sequencial; >1 = modo carga)")
     a = ap.parse_args()
+    if a.concorrencia < 1:
+        sys.exit("ERRO: --concorrencia precisa ser >= 1")
 
     saida = Path(a.saida)
     if saida.exists() and saida.stat().st_size > 0 and not a.anexar:
@@ -195,10 +232,14 @@ def main():
     if not NUM_PREDICT:
         print("AVISO: OLLAMA_NUM_PREDICT não definido; modelos podem gerar respostas de tamanhos muito diferentes.")
 
+    delineamento = ("2 passos por rodada, contrabalançado por classe, sem prompt repetido em sequência"
+                    if a.concorrencia == 1 else
+                    f"modo carga: 2 blocos por rodada (1 por cenário, ordem alternada), {a.concorrencia} simultâneas")
     meta = {"inicio_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "delineamento": "2 passos por rodada, contrabalançado por classe, sem prompt repetido em sequência",
+            "delineamento": delineamento,
             "argumentos": {"repeticoes": a.repeticoes, "aquecimento": a.aquecimento, "seed": a.seed,
-                           "n_prompts": len(prompts)},
+                           "n_prompts": len(prompts), "concorrencia": a.concorrencia,
+                           "prompts": Path(a.prompts).name},
             "config": {"num_predict": NUM_PREDICT or None, "timeout_cliente_s": TIMEOUT,
                        "ollama_host": OLLAMA, "balancer": LB_URL, "modelo_baseline": MODELO_BASELINE},
             "ambiente": ambiente()}
@@ -228,11 +269,31 @@ def main():
                 w.writeheader()
             # o último pedido do aquecimento é o último prompt da amostra: a 1a medição não pode repeti-lo
             ultimo_id = amostra[-1]["id"] if a.aquecimento > 0 else None
+            trava = threading.Lock()
+            meta["carga"] = []
             for rodada in range(1, a.repeticoes + 1):
+                if a.concorrencia > 1:
+                    for passo, cenario, itens in planejar_carga(prompts, rodada, a.seed):
+                        def registrar(k, item, med, rodada=rodada, passo=passo, cenario=cenario):
+                            linha = {"rodada": rodada, "passo": passo, "ordem_exec": k,
+                                     "concorrencia": a.concorrencia, **med}
+                            with trava:
+                                w.writerow(linha)
+                                f.flush()
+                            print(f"[r{rodada} p{passo} #{k:03d}] {cenario:8s} {item['id']} "
+                                  f"{linha['latencia_s']:.2f}s {'ok' if linha['sucesso'] else 'FALHA ' + linha['erro']}")
+                        dur = rodar_bloco(client, itens, cenario, a.concorrencia, registrar)
+                        bloco = {"rodada": rodada, "passo": passo, "cenario": cenario, "n": len(itens),
+                                 "concorrencia": a.concorrencia, "duracao_s": round(dur, 3),
+                                 "vazao_rps": round(len(itens) / dur, 4) if dur else None}
+                        meta["carga"].append(bloco)
+                        print(f"Bloco r{rodada} {cenario}: {len(itens)} req em {dur:.1f}s "
+                              f"({bloco['vazao_rps']:.3f} req/s)")
+                    continue
                 plano_r = planejar_rodada(prompts, rodada, a.seed, evitar_inicio=ultimo_id)
                 for ordem_exec, (passo, item, cenario) in enumerate(plano_r, 1):
                     linha = {"rodada": rodada, "passo": passo, "ordem_exec": ordem_exec,
-                             **medir(cenario, client, item)}
+                             "concorrencia": 1, **medir(cenario, client, item)}
                     w.writerow(linha)
                     f.flush()
                     print(f"[r{rodada} p{passo} #{ordem_exec:02d}] {cenario:8s} {item['id']} "

@@ -118,15 +118,20 @@ def _cmd_models_call(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 def _cmd_classify(args: argparse.Namespace) -> int:
     from src.classificador import classificar
+    from src.texto import tokenizador_ativo
 
-    result = classificar(args.prompt)
+    result = classificar(args.prompt, estrategia=args.estrategia)
     if args.json:
-        print(json.dumps(result.como_dict(), ensure_ascii=False, indent=2))
+        print(json.dumps({**result.como_dict(), "tokenizador": tokenizador_ativo()}, ensure_ascii=False, indent=2))
     else:
-        print(f"classe:  {result.classe}")
-        print(f"modelo:  {result.modelo}")
-        print(f"palavras:{result.palavras}")
-        print(f"motivo:  {result.motivo}")
+        print(f"classe:     {result.classe}")
+        print(f"modelo:     {result.modelo}")
+        print(f"estrategia: {result.estrategia}")
+        print(f"tokens:     {result.tokens} ({tokenizador_ativo()})")
+        print(f"palavras:   {result.palavras}")
+        if result.confianca is not None:
+            print(f"confianca:  {result.confianca:.2f}")
+        print(f"motivo:     {result.motivo}")
     return 0
 
 
@@ -291,6 +296,8 @@ def build_parser() -> argparse.ArgumentParser:
     # classify --------------------------------------------------------------
     p = commands.add_parser("classify", help="Classificar um prompt e mostrar o modelo escolhido")
     p.add_argument("--prompt", required=True)
+    p.add_argument("--estrategia", choices=("regras", "ml", "hibrido"), default=None,
+                   help="Sobrescreve CLASSIFICADOR do .env")
     p.add_argument("--json", action="store_true")
     p.set_defaults(handler=_cmd_classify)
 
@@ -318,12 +325,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("args", nargs=argparse.REMAINDER, help="Argumentos repassados a analisar.py")
     p.set_defaults(handler=_cmd_analyze)
 
+    # dados / classificador treinado (repassados aos scripts em experiments/) ---
+    for nome, (script, ajuda) in _SCRIPTS_EXTRAS.items():
+        p = commands.add_parser(nome, help=ajuda)
+        p.add_argument("args", nargs=argparse.REMAINDER, help=f"Argumentos repassados a {script}")
+
     return parser
 
+
+_SCRIPTS_EXTRAS = {
+    "generate-prompts": ("gerar_prompts.py", "Gerar prompts rotulados com um LLM (treino/teste/experimento)"),
+    "train-classifier": ("treinar_classificador.py", "Treinar o classificador ML (TF-IDF ou embeddings)"),
+    "eval-classifier": ("avaliar_classificador.py", "Comparar regras x ML x híbrido (x LLM) em acurácia e tempo"),
+}
 
 _PASS_THROUGH = {
     "experiment": "rodar_experimento.py",
     "analyze": "analisar.py",
+    **{nome: script for nome, (script, _) in _SCRIPTS_EXTRAS.items()},
 }
 
 

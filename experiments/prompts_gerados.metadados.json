@@ -1,0 +1,70 @@
+{
+  "finalizado_utc": "2026-11-26T19:43:27+00:00",
+  "modelos_geradores": [
+    "gemma4:e4b-it-qat"
+  ],
+  "celulas": 96,
+  "brutos": 723,
+  "descartados_curtos": 4,
+  "duplicatas_exatas": 0,
+  "quase_duplicatas": 0,
+  "limiar_similaridade": 0.9,
+  "descartados_revisao": 6,
+  "finais": 713,
+  "por_classe": {
+    "codigo": 230,
+    "complexo": 183,
+    "simples": 300
+  },
+  "por_idioma": {
+    "en": 241,
+    "es": 232,
+    "pt": 240
+  },
+  "por_subtipo": {
+    "argumentacao": 24,
+    "aritmetica": 30,
+    "comparacao": 24,
+    "consulta_sql_regex": 24,
+    "conversa": 30,
+    "conversao": 30,
+    "curto_dificil": 24,
+    "debug": 24,
+    "definicao": 30,
+    "escrever_funcao": 48,
+    "explicacao_profunda": 24,
+    "explicar_codigo": 24,
+    "factual": 30,
+    "ferramentas": 20,
+    "gramatica": 30,
+    "logica": 18,
+    "multietapas": 18,
+    "planejamento": 18,
+    "prova": 24,
+    "reescrita": 30,
+    "refatorar": 24,
+    "resumo_texto": 9,
+    "sem_palavra_chave": 48,
+    "sentimento": 30,
+    "termo_tecnico": 30,
+    "testes": 18,
+    "traducao": 30
+  },
+  "por_split": {
+    "teste": 208,
+    "treino": 505
+  },
+  "adversariais": 102,
+  "seed": 42,
+  "frac_teste": 0.3,
+  "subconjunto_experimento": {
+    "golden": 40,
+    "gerados": 120,
+    "por_classe": {
+      "simples": 40,
+      "codigo": 40,
+      "complexo": 40
+    }
+  },
+  "template": "Você está criando um conjunto de dados para treinar um classificador que roteia pedidos\nde usuários para modelos de IA de portes diferentes.\n\nClasse deste lote: \"{classe}\" = {definicao_classe}.\nSubtipo: {subtipo_desc}.\n{extras}\nGere exatamente {lote} prompts DIFERENTES entre si, como um usuário real os escreveria a um assistente.\nRegras:\n- Escreva todos os prompts em {idioma}.\n- Cada prompt deve ser autocontido: se mencionar um código, erro ou texto, inclua-o por extenso no\n  próprio prompt (nunca escreva \"segue o código\" sem o código).\n- Varie o tema, o tom (formal, informal, com erros de digitação ocasionais) e o tamanho.\n- Não numere os prompts e não mencione a classe nem o subtipo.\nResponda somente com JSON no formato {{\"prompts\": [\"...\", \"...\"]}}."
+}
