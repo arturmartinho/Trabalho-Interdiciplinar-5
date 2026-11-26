@@ -122,6 +122,34 @@ def test_despacho_redireciona_quando_o_modelo_nao_responde():
     assert result.ollama_latency_s == 0.4
 
 
+def test_despacho_propagada_o_uso_da_resposta_que_atendeu():
+    client = FakeClient([
+        OllamaCall(ok=False, latency_s=0.1, error="timeout", prompt_tokens=99),
+        OllamaCall(ok=True, latency_s=0.2, text="ok", prompt_tokens=7,
+                   completion_tokens=3, total_tokens=10, token_source="ollama"),
+    ])
+
+    result = _run(dispatch(
+        "capital da França",
+        classifier=lambda _prompt: Classification("simples", "AILO-152M-v2", "curto"),
+        client=client,
+        fallback_model="phi3.5",
+        request_id="req-usage",
+    ))
+
+    assert (result.prompt_tokens, result.completion_tokens, result.total_tokens) == (7, 3, 10)
+    assert result.token_source == "ollama"
+    assert body_tem_tokens(result.as_dict())
+
+
+def body_tem_tokens(body: dict) -> bool:
+    """O contrato da API sempre expõe os campos, mesmo quando vazios."""
+    return all(campo in body for campo in (
+        "prompt_tokens", "completion_tokens", "total_tokens", "token_source",
+        "prompt_eval_duration_s", "eval_duration_s", "load_duration_s", "total_duration_s",
+    ))
+
+
 def test_despacho_registra_o_redirecionamento_no_log(capsys):
     client = FakeClient(
         [
@@ -250,6 +278,50 @@ def test_cliente_mede_latencia_e_devolve_o_texto():
     assert result.text == "olá"
     assert result.latency_s >= 0
     assert result.status_code == 200
+    assert result.prompt_tokens is None
+    assert result.token_source is None
+
+
+def test_cliente_extrai_tokens_e_duracoes_do_ollama():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "response": "olá",
+            "prompt_eval_count": 12,
+            "eval_count": 5,
+            "prompt_eval_duration": 100_000_000,
+            "eval_duration": 250_000_000,
+            "load_duration": 1_500_000_000,
+            "total_duration": 1_850_000_000,
+        })
+
+    async def scenario():
+        client = OllamaClient(
+            "http://ollama.test",
+            timeout_s=3,
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            return await client.generate("phi3.5", "oi")
+        finally:
+            await client.aclose()
+
+    result = _run(scenario())
+    assert result.prompt_tokens == 12
+    assert result.completion_tokens == 5
+    assert result.total_tokens == 17
+    assert result.prompt_eval_duration_s == 0.1
+    assert result.eval_duration_s == 0.25
+    assert result.load_duration_s == 1.5
+    assert result.total_duration_s == 1.85
+    assert result.token_source == "ollama"
+
+
+def test_usage_ignora_contagens_invalidas():
+    from src.loadbalancer.usage import extract_usage
+
+    assert extract_usage({"prompt_eval_count": None, "eval_count": "x"}) == {}
+    assert extract_usage({"prompt_eval_count": 3, "eval_count": 4, "total_tokens": 99})["total_tokens"] == 7
+    assert extract_usage(None) == {}
 
 
 def test_cliente_usa_a_base_url_do_modelo_remoto():
@@ -347,7 +419,8 @@ def test_cliente_trata_http_de_erro_como_falha():
 
 
 def test_api_infer_encaminha_e_devolve_o_contrato():
-    client = FakeClient([OllamaCall(ok=True, latency_s=0.3, text="42")])
+    client = FakeClient([OllamaCall(ok=True, latency_s=0.3, text="42", prompt_tokens=4,
+                                   completion_tokens=2, total_tokens=6, token_source="ollama")])
     app = create_app(client=client, classifier=_classify_code)
 
     with TestClient(app) as http:
@@ -366,6 +439,9 @@ def test_api_infer_encaminha_e_devolve_o_contrato():
     assert body["redirected"] is False
     assert body["response"] == "42"
     assert "e2e_latency_s" in body
+    assert body_tem_tokens(body)
+    assert body["prompt_tokens"] == 4
+    assert body["total_tokens"] == 6
 
 
 def test_api_devolve_502_quando_o_fallback_tambem_falha():

@@ -19,6 +19,7 @@ kb/
 
 # Resultados de experimento (não subir — são gerados localmente)
 resultados.csv
+resultados_resumo.csv
 resultados.metadados.json
 relatorio_resultados.md
 experiments/graficos/

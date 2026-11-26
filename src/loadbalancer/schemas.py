@@ -49,13 +49,25 @@ class Classification:
 
 @dataclass(frozen=True)
 class OllamaCall:
-    """Resultado de uma chamada ao Ollama, com a latência medida no cliente."""
+    """Resultado de uma chamada ao Ollama, com a latência medida no cliente.
+
+    Os campos de uso são opcionais: clientes antigos e respostas sem
+    ``eval_count`` continuam funcionando sem alterar a semântica de sucesso.
+    """
 
     ok: bool
     latency_s: float
     text: str = ""
     error: str | None = None
     status_code: int | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    prompt_eval_duration_s: float | None = None
+    eval_duration_s: float | None = None
+    load_duration_s: float | None = None
+    total_duration_s: float | None = None
+    token_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +88,15 @@ class DispatchResult:
     e2e_latency_s: float
     ok: bool
     error: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    prompt_eval_duration_s: float | None = None
+    eval_duration_s: float | None = None
+    load_duration_s: float | None = None
+    total_duration_s: float | None = None
+    token_source: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
+        """Contrato da API. Campos novos aparecem com ``null`` em respostas antigas."""
         return asdict(self)

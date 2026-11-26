@@ -8,6 +8,7 @@ from typing import Any, Awaitable, Callable
 
 from src.loadbalancer.schemas import Classification, ClassifierError, DispatchResult
 from src.loadbalancer.settings import FALLBACK_MODEL
+from src.loadbalancer.usage import usage_from_call
 from src.log import error, info, warning
 
 Classifier = Callable[[str], Any | Awaitable[Any]]
@@ -113,6 +114,9 @@ async def dispatch(
         e2e_latency_s=e2e_latency_s,
         ok=final.ok,
         error=None if final.ok else final.error,
+        # Uso da tentativa que de fato respondeu; a tentativa que falhou não
+        # entra no total para não contar tokens de uma resposta descartada.
+        **usage_from_call(final),
     )
     _log_result(result)
     return result

@@ -491,16 +491,23 @@ A avaliação gera `relatorio_classificador.md`, com acurácia, F1-macro, matriz
 
 ## 🧪 Experimentos
 
-O experimento compara **dois cenários** sobre o mesmo conjunto de prompts:
+O experimento executa uma matriz **cenário × deployment** sobre o mesmo conjunto de prompts.
 
-| Cenário | Descrição |
+| Cenário (`--scenarios`) | Descrição |
 |---------|-----------|
-| **Baseline** | Toda requisição vai para o `Phi-3.5-mini` |
-| **Proposta** | O classificador decide o modelo |
+| `default_model` | Chamada direta ao Ollama `/api/generate` com o mesmo `model_tag`, sem classificador/LB |
+| `loadbalancer_classifier` | Chamada ao LB `/infer` (classificador + despacho + fallback existente) |
+
+| Deployment (`--deployments`) | Descrição |
+|---------|-----------|
+| `local` | `OLLAMA_HOST` local (ou `--ollama-local`) |
+| `remote` | `OLLAMA_REMOTE_HOST` (ou `--ollama-remote`). O **mesmo tag** precisa existir nos dois hosts; com o LB, use `--lb-remote-url` |
+
+Os apelidos antigos `baseline`/`proposta` continuam aceitos em `--scenarios`, e o analisador lê CSVs antigos sem `deployment`/`scenario`.
 
 ### Passo a passo
 
-1. Confirme que o Ollama e o load balancer estão no ar.
+1. Confirme que o Ollama e o load balancer estão no ar (e o remoto, se usado).
 2. Rode a coleta:
 
    ```bash
@@ -514,40 +521,61 @@ O experimento compara **dois cenários** sobre o mesmo conjunto de prompts:
    ```
 
    Saídas em `experiments/`:
-   - `resultados.csv` — uma linha por requisição
-   - `resultados.metadados.json` — ambiente, versões, config
+   - `resultados.csv` — uma linha por requisição (schema v2)
+   - `resultados.metadados.json` — matriz, endpoints efetivos, ambiente e regras de medição
+   - `resultados_resumo.csv` — agregações por cenário × deployment × classe + totais
    - `relatorio_resultados.md` — relatório descritivo
-   - `graficos/` — gráficos comparativos
+   - `graficos/` — latência, por classe, RAM/GPU, tokens e erro de classificação
 
 Também é possível executar os scripts diretamente:
 
 ```bash
 cd experiments
-python rodar_experimento.py --repeticoes 3 --aquecimento 2
+python rodar_experimento.py --prompts prompts_experimento.json --repeticoes 2
 python analisar.py
 ```
+
+O script `./executar_rodada.sh` aceita as variáveis `SCENARIOS`, `DEPLOYMENTS`, `MODEL_TAG`, `OLLAMA_REMOTE_HOST`, `LB_REMOTE_URL`, `RESOURCE_SAMPLE_MS` e `GPU_METRICS`, imprime a matriz efetiva antes de rodar e grava o resumo em `<base>.resumo.csv` (via `--resumo`). Sem `MODEL_TAG`/`MODELO_BASELINE`, o experimento usa o maior modelo **ativo no catálogo do LB** (comparando os metadados de parâmetros do Ollama); para mudar o padrão, registre o modelo maior com `python -m src models register --name <tag> --role complexo --status up`.
 
 ### Argumentos do experimento
 
 | Argumento | Padrão | Descrição |
 |-----------|--------|-----------|
-| `--repeticoes` | 1 | Número de rodadas completas por cenário |
+| `--scenarios` | ambos | `default_model,loadbalancer_classifier` |
+| `--deployments` | `local` | `local,remote` |
+| `--model-tag` | maior modelo registrado no catálogo do LB | Tag usado no `default_model` nos dois deployments; `MODELO_BASELINE` (ou a flag) fixa outro tag |
+| `--ollama-local` / `--ollama-remote` | variáveis de ambiente | Endpoints Ollama por deployment |
+| `--lb-local-url` / `--lb-remote-url` | env | URLs do LB por deployment |
+| `--resource-sample-ms` | 250 | Intervalo do sampler de RAM/GPU em background |
+| `--gpu-metrics` | `auto` | `auto`, `off` ou `nvidia-smi` |
+| `--repeticoes` | 1 | Rodadas completas da matriz |
 | `--aquecimento` | 2 | Passadas descartadas (carrega os modelos em RAM) |
-| `--seed` | 42 | Semente da ordem dos prompts (reprodutibilidade) |
+| `--seed` | 42 | Semente da ordem dos prompts |
 | `--anexar` | false | Permite acrescentar a um CSV existente |
-| `--prompts` | `prompts.json` | Caminho do conjunto de prompts |
+| `--prompts` | `prompts.json` | Conjunto de prompts (valida `id`, `prompt` e `classe_esperada`) |
 | `--saida` | `resultados.csv` | Caminho do CSV de saída |
 | `--concorrencia` | 1 | Requisições simultâneas; `> 1` liga o modo carga |
 
-Para o conjunto maior (40 manuais + 120 gerados):
+Para o conjunto maior (40 manuais + 120 gerados) e os dois deployments:
 
 ```bash
-python -m src experiment --prompts experiments/prompts_experimento.json --repeticoes 2
+python -m src experiment --prompts experiments/prompts_experimento.json \
+  --repeticoes 2 --deployments local,remote \
+  --ollama-remote http://servidor:11434 --lb-remote-url http://servidor:8000
 ```
+
+### Definições de medição
+
+- **Latência:** `latency_e2e_s` é `time.perf_counter` ao redor da chamada do cenário (ponta a ponta no cliente). `latencia_s` espelha esse valor por compatibilidade. `lb_e2e_s`/`ollama_latency_s` são latências internas reportadas pelo LB/Ollama e não substituem a e2e.
+- **P95/P99:** calculados na análise por `scenario × deployment × classe_esperada`, com subtotais e total global.
+- **RAM:** `psutil` (RSS do processo e RAM do sistema em MB/%), amostrada em thread daemon a cada `--resource-sample-ms`; o CSV traz média e pico por bloco e o último valor válido é reaproveitado quando uma leitura falha.
+- **GPU:** `nvidia-smi` também em background. Em multi-GPU, utilização é a **média** das GPUs da amostra, memória e potência são **somas**; pico é o máximo entre amostras. Em CPU-only, `gpu_available=false` e os campos numéricos ficam vazios. A regra vai para os metadados.
+- **Tokens:** `prompt_tokens = prompt_eval_count`, `completion_tokens = eval_count`, `total_tokens = prompt + completion`; durações em ns são convertidas para segundos. Quando a API do LB não traz esses campos, `token_source=lb_unavailable`.
+- **Loss no teste:** é a **taxa de erro de classificação**, não loss de treino. Para linhas com classe esperada e predita, `classification_error = 0` se forem iguais e `1` se diferentes; a análise reporta `classification_error_rate = mean(classification_error)`. Como `default_model` não tem classificador, `classe_predita`/`classification_error` ficam vazios e essas linhas **não entram no denominador**.
 
 ### Modo carga (`--concorrencia N`)
 
-Com `N > 1`, cada rodada roda dois blocos, um por cenário (com a ordem alternada entre rodadas). Cada bloco envia os mesmos prompts na mesma ordem, com `N` requisições simultâneas. Os cenários não se misturam no mesmo bloco, para que um não dispute CPU/GPU com o outro. O `analyze` mostra a vazão (req/s) de cada bloco e o ganho da proposta. A proposta distribui a carga entre três modelos, então o ganho depende de o Ollama manter todos carregados e atender em paralelo:
+Com `N > 1`, cada rodada roda um bloco homogêneo por cenário×deployment (ordem alternada entre rodadas), com os mesmos prompts na mesma ordem e `N` requisições simultâneas. Blocos de cenários/deployments diferentes não se misturam. O `analyze` mostra vazão (req/s) por bloco:
 
 ```bash
 # no terminal do Ollama (antes de `ollama serve`)
@@ -559,33 +587,34 @@ python -m src experiment --prompts experiments/prompts_experimento.json --concor
 ### Delineamento
 
 Para evitar viés de ordem, o script:
-- Executa o mesmo prompt nos **dois cenários**, uma vez cada por rodada;
-- **Contrabalança** quem vai primeiro (metade baseline, metade proposta, dentro de cada classe);
-- Separa os dois pedidos do mesmo prompt por ≥ n/2 chamadas;
+- Executa o mesmo prompt em todas as combinações da matriz, uma vez cada por rodada;
+- **Contrabalança** quem vem primeiro dentro de cada classe;
+- Separa as repetições do mesmo prompt por pelo menos `n/m` chamadas (`m` = combinações) e nunca as executa em sequência;
 - Faz **aquecimento** antes de medir, descartando essas chamadas.
 
-### Formato do CSV
+### Formato do CSV v2
 
-| Coluna | Descrição |
-|--------|-----------|
-| `timestamp` | Momento UTC da medição |
-| `rodada` | Número da rodada |
-| `passo` | 1 = primeiro cenário da rodada; 2 = o outro |
-| `ordem_exec` | Ordem de execução dentro da rodada |
-| `cenario` | `baseline` ou `proposta` |
-| `prompt_id` | ID do prompt (ex: `S01`, `C03`, `X07`) |
-| `classe_esperada` | `simples`, `codigo` ou `complexo` |
-| `classe` | Classe **decidida** pelo classificador (vazio no baseline) |
-| `modelo_escolhido` | Modelo que o classificador escolheu |
-| `modelo_atendeu` | Modelo que de fato respondeu (pode diferir se houve fallback) |
-| `desvio` | `true` se houve fallback |
-| `latencia_s` | Latência de ponta a ponta medida no cliente |
-| `lb_e2e_s` | Latência total reportada pelo Load Balancer |
-| `resposta_chars` | Tamanho da resposta em caracteres |
-| `sucesso` | `true` / `false` |
-| `erro` | Mensagem de erro, se houver |
-| `concorrencia` | Requisições simultâneas na rodada |
-| `idioma` / `subtipo` / `linguagem` | Metadados do prompt (vazios nos manuais antigos) |
+As colunas antigas permanecem nas mesmas posições; as novas foram acrescentadas no fim e `schema_version=2` identifica o formato.
+
+| Grupo | Colunas | Descrição |
+|-------|---------|-----------|
+| Identidade | `schema_version, run_id, scenario, deployment, model_tag, target_ollama_host, target_lb_url, effective_*` | Matriz e endpoints efetivos de cada linha |
+| Prompt | `timestamp, rodada, passo, ordem_exec, concorrencia, prompt_id, classe_esperada, idioma, subtipo, linguagem` | `id`/`prompt`/classe validados no carregamento |
+| Resultado | `sucesso, erro, response_chars, classe, classe_predita, modelo_escolhido, modelo_atendeu, desvio` | `classe_predita` espelha `classe` no LB; vazia no `default_model` |
+| Loss | `classification_correct, classification_error` | `0`/`1` ou vazio quando não aplicável |
+| Latência | `latencia_s, latency_e2e_s, lb_e2e_s, ollama_latency_s` | Segundos, e2e medida no cliente |
+| Tokens | `prompt_tokens, completion_tokens, total_tokens, token_source, *_duration_s` | Vazios se o Ollama/LB não informar |
+| RAM | `ram_rss_mb_{avg,peak}, ram_system_used_mb_{avg,peak}, ram_system_pct_{avg,peak}` | `psutil` |
+| GPU | `gpu_available, gpu_count, gpu_util_pct_{avg,peak}, gpu_mem_used_mb_{avg,peak}, gpu_mem_total_mb, gpu_power_w_{avg,peak}, gpu_sample_count, gpu_sample_interval_ms` | Vazio em CPU-only |
+| Amostragem | `resource_error` | Motivo de leitura degradada, se houver |
+
+O `resultados_resumo.csv` tem uma linha por `scenario,deployment,classe_esperada`, subtotais por cenário/deployment e o total global, com `n`, `ok`, `fail`, `latency_mean_s/median_s/p95_s/p99_s/max_s`, RAM/GPU médias e picos, tokens, `classification_error_rate` e `n_classified`.
+
+### Pré-requisitos para remoto e GPU
+
+- Ollama remoto acessível por HTTP com o **mesmo tag** de modelo e `OLLAMA_NUM_PARALLEL`/`OLLAMA_MAX_LOADED_MODELS` adequados; o LB remoto deve falar com esse Ollama (ou apontar para um balancer rodando lá).
+- O script pré-checa `/api/tags`, `/api/ps` e `/health` por deployment e aborta com erro claro se o tag ou o LB estiverem ausentes.
+- Para métricas de GPU, instale os drivers NVIDIA com `nvidia-smi` no PATH; use `--gpu-metrics off` em máquinas CPU-only. `psutil` vem no extra `experiments`.
 
 ---
 

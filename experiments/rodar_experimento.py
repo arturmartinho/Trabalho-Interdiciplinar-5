@@ -1,34 +1,31 @@
-"""Roda baseline e proposta sobre o mesmo conjunto de prompts e grava resultados.csv.
+"""Roda o experimento em uma matriz cenário × deployment e grava CSV v2.
 
-Baseline: todo prompt vai direto ao Phi-3.5-mini no Ollama (sem classificador).
-Proposta: todo prompt vai ao POST /infer do load balancer (vale a classificação).
+Cenários:
+  * ``default_model``: chamada direta ao Ollama com o mesmo ``model_tag``;
+  * ``loadbalancer_classifier``: chamada a ``POST /infer`` (classificador +
+    despacho + fallback existente).
 
-Medição: latência de ponta a ponta no cliente, com time.perf_counter(), nos dois cenários. O corpo enviado
-ao Ollama no baseline é idêntico ao que o balancer envia (model, prompt, stream=false e, se existir,
-options.num_predict vindo de OLLAMA_NUM_PREDICT). Sem limite igual, a latência mediria quanto cada
-modelo decidiu escrever, não a velocidade de cada um.
+Deployments:
+  * ``local``: ``OLLAMA_HOST`` local (ou ``--ollama-local``);
+  * ``remote``: ``OLLAMA_REMOTE_HOST`` (ou ``--ollama-remote``). O mesmo tag
+    precisa existir nos dois hosts. O LB remoto é o ``--lb-remote-url``.
 
-Delineamento de cada rodada (contrabalançado, para não favorecer nenhum cenário):
-  - o mesmo conjunto de prompts passa pelos dois cenários, uma vez cada por rodada;
-  - passo 1: todos os prompts em ordem embaralhada, cada um no cenário que lhe coube ir primeiro;
-  - passo 2: os mesmos prompts, em outra ordem, no outro cenário;
-  - quem vai primeiro é balanceado dentro de cada classe (metade baseline, metade proposta);
-  - os dois pedidos do mesmo prompt ficam separados por >= n/2 chamadas, e o mesmo prompt nunca roda duas
-    vezes seguidas. Assim o Ollama não reaproveita o cache do prompt anterior (nos complexos os dois
-    cenários usam o Phi, e rodar um logo após o outro favoreceria quem vai depois).
+Medição: ``latency_e2e_s`` = ``time.perf_counter`` ao redor da chamada do
+cenário. RAM/GPU são coletadas por ``ResourceSampler`` em background e
+agregadas por bloco; token usage vem da resposta do Ollama (direta ou via LB).
 
-Modo carga (--concorrencia N, N > 1): em vez de uma requisição por vez, cada rodada roda dois
-blocos (um por cenário, ordem alternada entre rodadas), cada um com os mesmos prompts na mesma
-ordem embaralhada e N requisições simultâneas. Os cenários não se misturam no mesmo bloco, para
-que um não dispute CPU/GPU com o outro. Além da latência por requisição, os metadados guardam a
-duração de cada bloco e a vazão (requisições por segundo). No Ollama, o paralelismo real depende
-de OLLAMA_NUM_PARALLEL e OLLAMA_MAX_LOADED_MODELS no servidor.
+Delineamento sequencial: contrabalançado entre todas as combinações da
+matriz, com o mesmo prompt separado por pelo menos n/m chamadas (m =
+combinações) e nenhuma repetição consecutiva. Modo carga (``--concorrencia``):
+um bloco homogêneo por cenário×deployment, ordem alternada entre rodadas.
 
 Uso:
   python -m src experiment --repeticoes 3 --aquecimento 2
-  python -m src experiment --prompts experiments/prompts_experimento.json --concorrencia 4
-Pré-requisitos: Ollama no ar com os 3 modelos e o load balancer em 127.0.0.1:8000.
+  python experiments/rodar_experimento.py --prompts experiments/prompts_experimento.json \
+      --scenarios default_model,loadbalancer_classifier --deployments local,remote
 """
+from __future__ import annotations
+
 import argparse
 import csv
 import json
@@ -40,121 +37,214 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 
 import httpx
-from dotenv import load_dotenv
 
-# .env fica na raiz do repositório (pai de experimentos/), independente do cwd.
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(_REPO_ROOT / ".env")
+# Permite executar como script (``python experiments/rodar_experimento.py``)
+# e como módulo: os imports de ``experiments`` e ``src`` precisam da raiz.
+_RAIZ = Path(__file__).resolve().parent.parent
+if str(_RAIZ) not in sys.path:
+    sys.path.insert(0, str(_RAIZ))
 
-OLLAMA = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
-LB_URL = os.getenv("LB_URL", "http://127.0.0.1:8000").rstrip("/")
-MODELO_BASELINE = os.getenv("FALLBACK_MODEL", "phi3.5")
-OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
-# Na proposta o servidor pode tentar o modelo escolhido e depois o fallback (2x timeout).
-TIMEOUT = OLLAMA_TIMEOUT * 2 + 60
-NUM_PREDICT = os.getenv("OLLAMA_NUM_PREDICT", "").strip()
+from experiments.analise_metricas import CENARIOS, CENARIO_LB  # noqa: E402
+from experiments.config_experimento import (  # noqa: E402
+    GPU_METRICS, LB_LOCAL_URL, LB_REMOTE_URL, LB_URL,
+    NUM_PREDICT, OLLAMA_HOST, OLLAMA_REMOTE_HOST, RESOURCE_SAMPLE_MS, TIMEOUT,
+    modelo_padrao,
+)
+from experiments.csv_resultados import COLUNAS, SCHEMA_VERSION, linha_vazia  # noqa: E402
+from experiments.entrada import CLASSES, carregar_prompts  # noqa: E402
+from experiments.recursos import ResourceSampler  # noqa: E402
+# `chamar_baseline`/`chamar_proposta` também são reexportados para quem
+# importava o runner antigo diretamente.
+from experiments.runners import (  # noqa: E402
+    ALIASES, ConfigExecucao, chamar_baseline, chamar_proposta,
+    classificacao, normalizar_cenario, runner_para,
+)
+from src.loadbalancer.dispatcher import same_model  # noqa: E402
 
-COLUNAS = [
-    "timestamp", "rodada", "passo", "ordem_exec", "cenario", "prompt_id", "classe_esperada", "classe",
-    "modelo_escolhido", "modelo_atendeu", "desvio", "latencia_s", "lb_e2e_s",
-    "resposta_chars", "sucesso", "erro",
-    # adicionadas depois; ficam no fim para não quebrar CSVs antigos
-    "concorrencia", "idioma", "subtipo", "linguagem",
-]
-
-
-def chamar_baseline(client, prompt):
-    corpo = {"model": MODELO_BASELINE, "prompt": prompt, "stream": False}
-    if NUM_PREDICT:
-        corpo["options"] = {"num_predict": int(NUM_PREDICT)}
-    r = client.post(f"{OLLAMA}/api/generate", json=corpo)
-    r.raise_for_status()
-    texto = (r.json().get("response") or "").strip()
-    if not texto:
-        raise ValueError("resposta vazia")  # o balancer também trata vazio como falha
-    return {"classe": "", "modelo_escolhido": MODELO_BASELINE, "modelo_atendeu": MODELO_BASELINE,
-            "desvio": False, "lb_e2e_s": "", "resposta_chars": len(texto)}
+# Reexportados para compatibilidade com quem importava estas constantes.
+OLLAMA = OLLAMA_HOST
+DEPLOYMENTS = ("local", "remote")
 
 
-def chamar_proposta(client, prompt, prompt_id):
-    r = client.post(f"{LB_URL}/infer", json={"prompt": prompt, "prompt_id": prompt_id})
-    d = r.json()  # em falha o balancer devolve 502 com o JSON do despacho
-    if r.status_code >= 400 or not d.get("ok", False):
-        raise RuntimeError(f"http {r.status_code}: {d.get('error')}")
-    return {"classe": d.get("label", ""), "modelo_escolhido": d.get("chosen_model", ""),
-            "modelo_atendeu": d.get("served_model", ""), "desvio": d.get("redirected", ""),
-            "lb_e2e_s": d.get("e2e_latency_s", ""), "resposta_chars": len(d.get("response") or "")}
+def medir(
+    cenario,
+    client,
+    item,
+    *,
+    cfg: ConfigExecucao | None = None,
+    deployment: str = "local",
+    runner=None,
+    clock=time.perf_counter,
+    run_id: str = "",
+):
+    """Executa um item e devolve a linha completa do CSV v2."""
+    cfg = cfg or ConfigExecucao()
+    nome = normalizar_cenario(cenario)
+    runner = runner or runner_para(cenario, cfg, deployment)
 
-
-def medir(cenario, client, item):
-    t0 = time.perf_counter()
+    t0 = clock()
     try:
-        info = (chamar_baseline(client, item["prompt"]) if cenario == "baseline"
-                else chamar_proposta(client, item["prompt"], item["id"]))
+        info = runner.call(client, item, cfg, deployment)
         sucesso, erro = True, ""
-    except Exception as e:  # falha conta como falha, não entra na latência
-        info = {"classe": "", "modelo_escolhido": "", "modelo_atendeu": "", "desvio": "",
-                "lb_e2e_s": "", "resposta_chars": ""}
-        sucesso, erro = False, f"{type(e).__name__}: {e}"
-    dt = time.perf_counter() - t0
-    return {"timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "cenario": cenario, "prompt_id": item["id"],
-            "classe_esperada": item["classe_esperada"], **info,
-            "latencia_s": round(dt, 4), "sucesso": sucesso, "erro": erro,
-            "idioma": item.get("idioma", ""), "subtipo": item.get("subtipo", ""),
-            "linguagem": item.get("linguagem", "")}
+    except Exception as exc:  # falha conta como falha; latência ainda é registrada
+        info = {}
+        sucesso, erro = False, f"{type(exc).__name__}: {exc}"
+    dt = round(clock() - t0, 4)
+
+    predita = str(info.get("classe") or "")
+    return {
+        **linha_vazia(),
+        **info,
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+        "cenario": cenario,
+        "scenario": nome,
+        "deployment": deployment,
+        "prompt_id": item["id"],
+        "classe_esperada": item["classe_esperada"],
+        "model_tag": cfg.model_tag,
+        "target_ollama_host": cfg.ollama_host(deployment),
+        "target_lb_url": cfg.lb_url(deployment) if nome == CENARIO_LB else "",
+        **cfg.effective(deployment, nome),
+        "classe_predita": predita,
+        **classificacao(nome, predita, item["classe_esperada"]),
+        "latencia_s": dt,
+        "latency_e2e_s": dt,
+        "sucesso": sucesso,
+        "erro": erro,
+        "idioma": item.get("idioma", ""),
+        "subtipo": item.get("subtipo", ""),
+        "linguagem": item.get("linguagem", ""),
+    }
 
 
-def planejar_rodada(prompts, rodada, seed, evitar_inicio=None):
-    """Devolve [(passo, item, cenario), ...] com o delineamento contrabalançado descrito no topo."""
+def planejar_rodada(
+    prompts,
+    rodada,
+    seed,
+    evitar_inicio=None,
+    cenarios=CENARIOS,
+    deployments=("local",),
+):
+    """``[(passo, item, cenario, deployment), ...]`` contrabalançado.
+
+    Cada prompt passa por todas as combinações cenário×deployment uma vez por
+    rodada; quem vem primeiro é balanceado dentro de cada classe.
+    """
+    combinacoes = [(cenario, deployment) for deployment in deployments for cenario in cenarios]
+    if not combinacoes:
+        raise ValueError("é preciso selecionar ao menos um cenário e um deployment")
     rng = random.Random(f"{seed}-{rodada}")
-    primeiro = {}
+    primeiro: dict[str, tuple[str, str]] = {}
     for classe in sorted({p["classe_esperada"] for p in prompts}):
         ids = [p["id"] for p in prompts if p["classe_esperada"] == classe]
         rng.shuffle(ids)
-        for k, pid in enumerate(ids):
-            primeiro[pid] = "baseline" if k % 2 == 0 else "proposta"
-    passo1 = prompts[:]
-    rng.shuffle(passo1)
-    while evitar_inicio is not None and len(passo1) > 1 and passo1[0]["id"] == evitar_inicio:
-        rng.shuffle(passo1)
-    h = len(passo1) // 2
-    passo2 = passo1[h:] + passo1[:h]  # cada prompt volta >= n/2 chamadas depois
-    outro = {"baseline": "proposta", "proposta": "baseline"}
-    return ([(1, p, primeiro[p["id"]]) for p in passo1] +
-            [(2, p, outro[primeiro[p["id"]]]) for p in passo2])
+        for posicao, pid in enumerate(ids):
+            primeiro[pid] = combinacoes[posicao % len(combinacoes)]
+
+    ordem = prompts[:]
+    rng.shuffle(ordem)
+    while evitar_inicio is not None and len(ordem) > 1 and ordem[0]["id"] == evitar_inicio:
+        rng.shuffle(ordem)
+
+    n = len(ordem)
+    distancia = max(1, n // len(combinacoes))
+    plano = []
+    for passo, _combinacao in enumerate(combinacoes):
+        deslocamento = (passo * distancia) % n
+        rotacionados = ordem[deslocamento:] + ordem[:deslocamento]
+        for item in rotacionados:
+            cenario, deployment = primeiro[item["id"]]
+            combinacao = combinacoes[(combinacoes.index((cenario, deployment)) + passo) % len(combinacoes)]
+            plano.append((passo + 1, item, combinacao[0], combinacao[1]))
+    return plano
 
 
-def planejar_carga(prompts, rodada, seed):
-    """Modo carga: [(passo, cenario, [itens...]), ...], um bloco por cenário, mesma ordem nos dois."""
+def planejar_carga_matriz(prompts, rodada, seed, cenarios=CENARIOS, deployments=("local",)):
+    """``[(passo, cenario, deployment, itens), ...]``; blocos homogêneos."""
     rng = random.Random(f"{seed}-carga-{rodada}")
     ordem = prompts[:]
     rng.shuffle(ordem)
-    cenarios = ("baseline", "proposta") if rodada % 2 == 1 else ("proposta", "baseline")
-    return [(passo, cenario, ordem) for passo, cenario in enumerate(cenarios, 1)]
+    combinacoes = [(cenario, deployment) for deployment in deployments for cenario in cenarios]
+    if rodada % 2 == 0:
+        combinacoes = list(reversed(combinacoes))
+    return [
+        (passo, cenario, deployment, ordem)
+        for passo, (cenario, deployment) in enumerate(combinacoes, 1)
+    ]
 
 
-def rodar_bloco(client, itens, cenario, concorrencia, ao_terminar):
-    """Executa os itens com `concorrencia` requisições simultâneas; devolve a duração do bloco."""
+def planejar_carga(
+    prompts,
+    rodada,
+    seed,
+    cenarios=("baseline", "proposta"),
+    deployments=("local",),
+):
+    """Compatibilidade com o chamador antigo (um deployment → 3-tuplas)."""
+    blocos = planejar_carga_matriz(prompts, rodada, seed, cenarios, deployments)
+    if len(deployments) == 1:
+        return [(passo, cenario, itens) for passo, cenario, _dep, itens in blocos]
+    return blocos
+
+
+def rodar_bloco(
+    client,
+    itens,
+    cenario,
+    concorrencia,
+    ao_terminar,
+    *,
+    medir_fn=None,
+    sampler: ResourceSampler | None = None,
+    deployment: str = "local",
+):
+    """Executa itens com ``concorrencia`` requisições simultâneas.
+
+    Com ``sampler``, as linhas são entregues a ``ao_terminar`` depois de
+    ``stop()``, já enriquecidas com média/pico de RAM e GPU do bloco.
+    """
+    funcao = medir_fn or medir
+    pendentes = []
+    if sampler is not None:
+        sampler.reset()
+        sampler.start()
     t0 = time.perf_counter()
     with ThreadPoolExecutor(max_workers=concorrencia) as pool:
-        futuros = [(k, item, pool.submit(medir, cenario, client, item)) for k, item in enumerate(itens, 1)]
-        for k, item, fut in futuros:
-            ao_terminar(k, item, fut.result())
-    return time.perf_counter() - t0
+        futuros = [
+            (k, item, pool.submit(funcao, cenario, client, item))
+            for k, item in enumerate(itens, 1)
+        ]
+        for k, item, futuro in futuros:
+            linha = dict(futuro.result())
+            if sampler is None:
+                ao_terminar(k, item, linha)
+            else:
+                pendentes.append((k, item, linha))
+    duracao = time.perf_counter() - t0
+    recursos = sampler.stop() if sampler is not None else {}
+    for k, item, linha in pendentes:
+        ao_terminar(k, item, {**linha, **recursos})
+    return duracao
 
 
+# --------------------------------------------------------------------------- #
+# Metadados e checagens
+# --------------------------------------------------------------------------- #
 def _get(client, url):
     try:
-        r = client.get(url, timeout=15)
-        return r.json() if r.status_code == 200 else {"_http": r.status_code}
-    except Exception as e:  # coleta de metadados nunca derruba o experimento
-        return {"_erro": f"{type(e).__name__}: {e}"}
+        resposta = client.get(url, timeout=15)
+        return resposta.json() if resposta.status_code == 200 else {"_http": resposta.status_code}
+    except Exception as exc:  # metadados nunca derrubam a medição
+        return {"_erro": f"{type(exc).__name__}: {exc}"}
 
 
 def _cmd(args):
@@ -184,127 +274,283 @@ def ambiente():
     return {
         "so": platform.platform(), "python": sys.version.split()[0],
         "cpu": (_cmd(["sh", "-c", "grep -m1 'model name' /proc/cpuinfo | cut -d: -f2"]) or platform.processor()).strip(),
-        "cpu_nucleos": os.cpu_count(), "ram_total_gb": _ram_gb(), "gpu": gpu or "não detectada por nvidia-smi",
+        "cpu_nucleos": os.cpu_count(), "ram_total_gb": _ram_gb(),
+        "gpu": gpu or "não detectada por nvidia-smi",
         "git_commit": _cmd(["git", "-C", str(raiz), "rev-parse", "--short", "HEAD"]),
         "git_branch": _cmd(["git", "-C", str(raiz), "branch", "--show-current"]),
     }
 
 
-def modelos_carregados(client):
-    d = _get(client, f"{OLLAMA}/api/ps")
+def modelos_carregados(client, ollama_host: str | None = None):
+    host = (ollama_host or OLLAMA_HOST).rstrip("/")
+    dados = _get(client, f"{host}/api/ps")
     return [{"nome": m.get("name"), "tamanho_vram_mb": round(m.get("size_vram", 0) / 1e6),
-             "tamanho_mb": round(m.get("size", 0) / 1e6)} for m in d.get("models", [])]
+             "tamanho_mb": round(m.get("size", 0) / 1e6)} for m in dados.get("models", [])]
+
+
+def checar_deployments(client, cfg, deployments, cenarios):
+    """Pré-checa ``/api/tags``, ``/api/ps`` e ``/health`` por deployment."""
+    checagens = {}
+    for deployment in deployments:
+        host = cfg.ollama_host(deployment)
+        tags = _get(client, f"{host}/api/tags")
+        ps = _get(client, f"{host}/api/ps")
+        health = _get(client, f"{cfg.lb_url(deployment)}/health") if CENARIO_LB in cenarios else {"_skip": True}
+        instalados = [m.get("name") for m in tags.get("models", [])]
+        falhas = []
+        if tags.get("_erro") or tags.get("_http") or not instalados:
+            falhas.append(f"Ollama {host} sem modelos ou fora do ar ({tags})")
+        if CENARIO_LB in cenarios and not health.get("ok"):
+            falhas.append(f"balancer fora do ar em {cfg.lb_url(deployment)}/health ({health})")
+        # Ollama aceita `phi3.5` como atalho de `phi3.5:latest`; comparar a
+        # família evita abortar uma rodada válida só por causa do tag.
+        presente = any(same_model(str(nome), cfg.model_tag) for nome in instalados if nome)
+        if not presente and instalados:
+            falhas.append(f"modelo {cfg.model_tag} não está em {host}/api/tags")
+        checagens[deployment] = {
+            "ollama_host": host,
+            "lb_url": cfg.lb_url(deployment) if CENARIO_LB in cenarios else "",
+            "api_tags": tags, "api_ps": ps, "health": health,
+            "modelos_instalados": instalados,
+            "model_tag_solicitado": cfg.model_tag,
+            "model_tag_presente": presente,
+            "falhas": falhas,
+        }
+        if falhas:
+            sys.exit(f"ERRO: deployment '{deployment}': " + "; ".join(falhas))
+    return checagens
 
 
 def checar_prontidao(client):
-    """Aborta antes de gastar a rodada se o ambiente não está pronto."""
-    h = _get(client, f"{LB_URL}/health")
-    if not h.get("ok"):
-        sys.exit(f"ERRO: balancer não está pronto em {LB_URL}/health -> {h}\n"
+    """Compatibilidade com a checagem de um único deployment."""
+    health = _get(client, f"{LB_URL}/health")
+    if not health.get("ok"):
+        sys.exit(f"ERRO: balancer não está pronto em {LB_URL}/health -> {health}\n"
                  "Suba o balancer em outro terminal: python -m src serve")
-    if not _get(client, f"{OLLAMA}/api/tags").get("models"):
-        sys.exit(f"ERRO: Ollama sem modelos ou fora do ar em {OLLAMA}")
-    return h
+    if not _get(client, f"{OLLAMA_HOST}/api/tags").get("models"):
+        sys.exit(f"ERRO: Ollama sem modelos ou fora do ar em {OLLAMA_HOST}")
+    return health
 
 
-def main():
+def _parse_opcoes(valor: str, permitidos, nome: str):
+    itens = [parte.strip().lower() for parte in str(valor).split(",") if parte.strip()]
+    if not itens:
+        raise ValueError(f"--{nome} precisa de ao menos um valor")
+    normalizados = []
+    for item in itens:
+        item = ALIASES.get(item, item)
+        if item not in permitidos:
+            raise ValueError(f"--{nome}: '{item}' inválido (use {', '.join(permitidos)})")
+        if item not in normalizados:
+            normalizados.append(item)
+    return tuple(normalizados)
+
+
+def _construir_parser():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prompts", default=str(Path(__file__).resolve().parent / "prompts.json"))
     ap.add_argument("--saida", default=str(Path(__file__).resolve().parent / "resultados.csv"))
-    ap.add_argument("--repeticoes", type=int, default=1, help="rodadas completas por cenário")
+    ap.add_argument("--repeticoes", type=int, default=1, help="rodadas completas da matriz")
     ap.add_argument("--aquecimento", type=int, default=2, help="passadas descartadas")
-    ap.add_argument("--seed", type=int, default=42, help="ordem dos prompts (mesma nos 2 cenários)")
+    ap.add_argument("--seed", type=int, default=42, help="ordem dos prompts (mesma nos cenários)")
     ap.add_argument("--anexar", action="store_true", help="permite acrescentar a um CSV existente")
     ap.add_argument("--concorrencia", type=int, default=1,
-                    help="requisições simultâneas (1 = delineamento sequencial; >1 = modo carga)")
-    a = ap.parse_args()
-    if a.concorrencia < 1:
-        sys.exit("ERRO: --concorrencia precisa ser >= 1")
+                    help="requisições simultâneas (1 = contrabalançado; >1 = modo carga)")
+    ap.add_argument("--scenarios", "--cenarios", default=",".join(CENARIOS),
+                    help="default_model,loadbalancer_classifier (aceita baseline,proposta)")
+    ap.add_argument("--deployments", default="local", help="local,remote")
+    ap.add_argument("--model-tag", default=None,
+                    help="tag usado no default_model nos dois deployments "
+                         "(padrão: maior modelo registrado no catálogo do LB)")
+    ap.add_argument("--ollama-local", default=OLLAMA_HOST)
+    ap.add_argument("--ollama-remote", default=OLLAMA_REMOTE_HOST)
+    ap.add_argument("--lb-local-url", default=LB_LOCAL_URL)
+    ap.add_argument("--lb-remote-url", default=LB_REMOTE_URL)
+    ap.add_argument("--resource-sample-ms", type=int, default=RESOURCE_SAMPLE_MS,
+                    help="intervalo do sampler de RAM/GPU (background)")
+    ap.add_argument("--gpu-metrics", choices=("auto", "off", "nvidia-smi"), default=GPU_METRICS)
+    return ap
 
-    saida = Path(a.saida)
-    if saida.exists() and saida.stat().st_size > 0 and not a.anexar:
+
+def main():
+    args = _construir_parser().parse_args()
+    if args.concorrencia < 1:
+        sys.exit("ERRO: --concorrencia precisa ser >= 1")
+    if args.aquecimento < 0 or args.repeticoes < 1:
+        sys.exit("ERRO: --aquecimento precisa ser >= 0 e --repeticoes >= 1")
+    try:
+        cenarios = _parse_opcoes(args.scenarios, CENARIOS, "scenarios")
+        deployments = _parse_opcoes(args.deployments, DEPLOYMENTS, "deployments")
+        cfg = ConfigExecucao(
+            model_tag=(args.model_tag or "").strip() or modelo_padrao(),
+            ollama_local=args.ollama_local,
+            ollama_remote=args.ollama_remote,
+            lb_local_url=args.lb_local_url,
+            lb_remote_url=args.lb_remote_url,
+            num_predict=NUM_PREDICT,
+        )
+        prompts = carregar_prompts(args.prompts)
+    except ValueError as exc:
+        sys.exit(f"ERRO: {exc}")
+
+    if "remote" in deployments and not cfg.ollama_remote:
+        sys.exit("ERRO: --deployments remote exige --ollama-remote ou OLLAMA_REMOTE_HOST")
+    if "remote" in deployments and CENARIO_LB in cenarios and not cfg.lb_remote_url:
+        sys.exit("ERRO: --deployments remote com loadbalancer_classifier exige --lb-remote-url ou LB_REMOTE_URL")
+
+    saida = Path(args.saida)
+    if saida.exists() and saida.stat().st_size > 0 and not args.anexar:
         sys.exit(f"ERRO: {saida} já existe. Apague/renomeie (para não misturar rodadas) ou use --anexar.")
 
-    prompts = json.loads(Path(a.prompts).read_text(encoding="utf-8"))
-
-    print(f"Ollama={OLLAMA} balancer={LB_URL} baseline={MODELO_BASELINE} "
-          f"num_predict={NUM_PREDICT or 'SEM LIMITE'} timeout_cliente_s={TIMEOUT}")
+    print(f"cenários={','.join(cenarios)} deployments={','.join(deployments)} "
+          f"model_tag={cfg.model_tag} num_predict={NUM_PREDICT or 'SEM LIMITE'} "
+          f"timeout_cliente_s={TIMEOUT}")
     if not NUM_PREDICT:
         print("AVISO: OLLAMA_NUM_PREDICT não definido; modelos podem gerar respostas de tamanhos muito diferentes.")
 
-    delineamento = ("2 passos por rodada, contrabalançado por classe, sem prompt repetido em sequência"
-                    if a.concorrencia == 1 else
-                    f"modo carga: 2 blocos por rodada (1 por cenário, ordem alternada), {a.concorrencia} simultâneas")
-    meta = {"inicio_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "delineamento": delineamento,
-            "argumentos": {"repeticoes": a.repeticoes, "aquecimento": a.aquecimento, "seed": a.seed,
-                           "n_prompts": len(prompts), "concorrencia": a.concorrencia,
-                           "prompts": Path(a.prompts).name},
-            "config": {"num_predict": NUM_PREDICT or None, "timeout_cliente_s": TIMEOUT,
-                       "ollama_host": OLLAMA, "balancer": LB_URL, "modelo_baseline": MODELO_BASELINE},
-            "ambiente": ambiente()}
+    run_id = uuid.uuid4().hex[:12]
+    matriz = [
+        {"scenario": cenario, "deployment": deployment, **cfg.effective(deployment, cenario)}
+        for deployment in deployments for cenario in cenarios
+    ]
+    delineamento = (
+        f"{len(matriz)} combinações por rodada, contrabalançadas por classe, sem prompt repetido em sequência"
+        if args.concorrencia == 1 else
+        f"modo carga: {len(matriz)} blocos por rodada (um por cenário×deployment, ordem alternada), "
+        f"{args.concorrencia} simultâneas"
+    )
+    meta = {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+        "inicio_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "delineamento": delineamento,
+        "matriz": matriz,
+        "argumentos": {
+            "repeticoes": args.repeticoes, "aquecimento": args.aquecimento,
+            "seed": args.seed, "n_prompts": len(prompts), "concorrencia": args.concorrencia,
+            "prompts": Path(args.prompts).name, "scenarios": list(cenarios),
+            "deployments": list(deployments),
+        },
+        "config": {
+            "num_predict": NUM_PREDICT or None, "timeout_cliente_s": TIMEOUT,
+            "model_tag": cfg.model_tag,
+            "ollama_local": cfg.ollama_local, "ollama_remote": cfg.ollama_remote,
+            "lb_local_url": cfg.lb_local_url, "lb_remote_url": cfg.lb_remote_url,
+            "resource_sample_ms": args.resource_sample_ms, "gpu_metrics": args.gpu_metrics,
+        },
+        "regras_medicao": {
+            "latencia": "latency_e2e_s = perf_counter ao redor da chamada do cenário (ponta a ponta no cliente)",
+            "ram": "psutil: RSS do processo e RAM do sistema (used MB / percent); avg e peak por bloco, cache do último sample válido",
+            "gpu": "nvidia-smi por amostra: utilização = média das GPUs; memória e potência = soma; pico = máximo entre amostras",
+            "tokens": "prompt_tokens=prompt_eval_count, completion_tokens=eval_count, total=soma; durações ns→s",
+            "loss": "classification_error = 0/1 apenas em loadbalancer_classifier; default_model é NA e não entra no denominador",
+        },
+        "ambiente": ambiente(),
+        "carga": [],
+    }
 
     with httpx.Client(timeout=TIMEOUT) as client:
-        meta["balancer_health"] = checar_prontidao(client)
-        meta["ollama_versao"] = _get(client, f"{OLLAMA}/api/version").get("version")
-        meta["modelos_instalados"] = [m.get("name") for m in _get(client, f"{OLLAMA}/api/tags").get("models", [])]
+        meta["checagens"] = checar_deployments(client, cfg, deployments, cenarios)
+        meta["ollama_versao"] = _get(client, f"{cfg.ollama_local}/api/version").get("version")
 
-        # Aquecimento: carrega os modelos na memória; essas chamadas NÃO vão ao CSV.
-        amostra = [next(p for p in prompts if p["classe_esperada"] == c)
-                   for c in ("simples", "codigo", "complexo")]
+        # Aquecimento: carrega os modelos; estas chamadas não vão ao CSV.
+        amostra = []
+        for classe in CLASSES:
+            candidato = next((p for p in prompts if p["classe_esperada"] == classe), None)
+            if candidato:
+                amostra.append(candidato)
         falhas_aq = 0
-        for _ in range(a.aquecimento):
-            for item in amostra:
-                for cenario in ("baseline", "proposta"):
-                    falhas_aq += 0 if medir(cenario, client, item)["sucesso"] else 1
-        print(f"Aquecimento: {a.aquecimento} passada(s) x 3 prompts x 2 cenários (descartadas); falhas: {falhas_aq}")
+        for deployment in deployments:
+            for cenario in cenarios:
+                runner = runner_para(cenario, cfg, deployment)
+                for _ in range(args.aquecimento):
+                    for item in amostra:
+                        falhas_aq += 0 if medir(cenario, client, item, cfg=cfg,
+                                               deployment=deployment, runner=runner,
+                                               run_id=run_id)["sucesso"] else 1
+        print(f"Aquecimento: {args.aquecimento} passada(s) x {len(amostra)} prompts x {len(matriz)} combinações "
+              f"(descartadas); falhas: {falhas_aq}")
         meta["aquecimento_falhas"] = falhas_aq
-        meta["modelos_carregados_apos_aquecimento"] = modelos_carregados(client)
-        print("Carregados no Ollama:", [m["nome"] for m in meta["modelos_carregados_apos_aquecimento"]])
+        meta["modelos_carregados_apos_aquecimento"] = modelos_carregados(client, cfg.ollama_local)
+        print("Carregados no Ollama local:", [m["nome"] for m in meta["modelos_carregados_apos_aquecimento"]])
 
         novo = not saida.exists() or saida.stat().st_size == 0
-        with open(saida, "a", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=COLUNAS, lineterminator="\n")
+        trava = threading.Lock()
+        with open(saida, "a", newline="", encoding="utf-8") as arquivo:
+            escritor = csv.DictWriter(arquivo, fieldnames=COLUNAS, lineterminator="\n")
             if novo:
-                w.writeheader()
-            # o último pedido do aquecimento é o último prompt da amostra: a 1a medição não pode repeti-lo
-            ultimo_id = amostra[-1]["id"] if a.aquecimento > 0 else None
-            trava = threading.Lock()
-            meta["carga"] = []
-            for rodada in range(1, a.repeticoes + 1):
-                if a.concorrencia > 1:
-                    for passo, cenario, itens in planejar_carga(prompts, rodada, a.seed):
-                        def registrar(k, item, med, rodada=rodada, passo=passo, cenario=cenario):
-                            linha = {"rodada": rodada, "passo": passo, "ordem_exec": k,
-                                     "concorrencia": a.concorrencia, **med}
+                escritor.writeheader()
+            sampler = ResourceSampler(args.resource_sample_ms, args.gpu_metrics)
+
+            for rodada in range(1, args.repeticoes + 1):
+                if args.concorrencia > 1:
+                    for passo, cenario, deployment, itens in planejar_carga_matriz(
+                        prompts, rodada, args.seed, cenarios, deployments
+                    ):
+                        medidor = partial(medir, cfg=cfg, deployment=deployment, run_id=run_id)
+
+                        def registrar(k, item, linha, *, rodada=rodada, passo=passo,
+                                      cenario=cenario, deployment=deployment):
+                            completa = {"rodada": rodada, "passo": passo, "ordem_exec": k,
+                                        "concorrencia": args.concorrencia, **linha}
                             with trava:
-                                w.writerow(linha)
-                                f.flush()
-                            print(f"[r{rodada} p{passo} #{k:03d}] {cenario:8s} {item['id']} "
-                                  f"{linha['latencia_s']:.2f}s {'ok' if linha['sucesso'] else 'FALHA ' + linha['erro']}")
-                        dur = rodar_bloco(client, itens, cenario, a.concorrencia, registrar)
-                        bloco = {"rodada": rodada, "passo": passo, "cenario": cenario, "n": len(itens),
-                                 "concorrencia": a.concorrencia, "duracao_s": round(dur, 3),
-                                 "vazao_rps": round(len(itens) / dur, 4) if dur else None}
-                        meta["carga"].append(bloco)
-                        print(f"Bloco r{rodada} {cenario}: {len(itens)} req em {dur:.1f}s "
-                              f"({bloco['vazao_rps']:.3f} req/s)")
-                    continue
-                plano_r = planejar_rodada(prompts, rodada, a.seed, evitar_inicio=ultimo_id)
-                for ordem_exec, (passo, item, cenario) in enumerate(plano_r, 1):
-                    linha = {"rodada": rodada, "passo": passo, "ordem_exec": ordem_exec,
-                             "concorrencia": 1, **medir(cenario, client, item)}
-                    w.writerow(linha)
-                    f.flush()
-                    print(f"[r{rodada} p{passo} #{ordem_exec:02d}] {cenario:8s} {item['id']} "
-                          f"{linha['latencia_s']:.2f}s {'ok' if linha['sucesso'] else 'FALHA ' + linha['erro']}")
-                ultimo_id = plano_r[-1][1]["id"]
-        meta["modelos_carregados_ao_final"] = modelos_carregados(client)
+                                escritor.writerow(completa)
+                                arquivo.flush()
+                            print(f"[r{rodada} p{passo} #{k:03d}] {deployment}/{cenario} {item['id']} "
+                                  f"{completa['latencia_s']:.2f}s "
+                                  f"{'ok' if completa['sucesso'] else 'FALHA ' + completa['erro']}")
+
+                        dur = rodar_bloco(client, itens, cenario, args.concorrencia, registrar,
+                                          medir_fn=medidor, sampler=sampler, deployment=deployment)
+                        meta["carga"].append({
+                            "rodada": rodada, "passo": passo, "cenario": cenario,
+                            "deployment": deployment, "n": len(itens),
+                            "concorrencia": args.concorrencia, "duracao_s": round(dur, 3),
+                            "vazao_rps": round(len(itens) / dur, 4) if dur else None,
+                        })
+                        print(f"Bloco r{rodada} {deployment}/{cenario}: {len(itens)} req em {dur:.1f}s "
+                              f"({len(itens) / dur:.3f} req/s)" if dur else "")
+
+                else:
+                    plano = planejar_rodada(prompts, rodada, args.seed, cenarios=cenarios,
+                                            deployments=deployments)
+                    itens_ctx = [{**item, "_cenario": cenario, "_deployment": deployment,
+                                  "_passo": passo} for passo, item, cenario, deployment in plano]
+
+                    def medir_sequencial(_cenario, _client, item):
+                        return medir(item["_cenario"], _client, item, cfg=cfg,
+                                     deployment=item["_deployment"], run_id=run_id)
+
+                    def registrar_sequencial(k, item, linha, *, rodada=rodada):
+                        completa = {"rodada": rodada, "passo": item["_passo"], "ordem_exec": k,
+                                    "concorrencia": 1, **linha}
+                        with trava:
+                            escritor.writerow(completa)
+                            arquivo.flush()
+                        print(f"[r{rodada} p{item['_passo']} #{k:03d}] "
+                              f"{item['_deployment']}/{item['_cenario']} {item['id']} "
+                              f"{completa['latencia_s']:.2f}s "
+                              f"{'ok' if completa['sucesso'] else 'FALHA ' + completa['erro']}")
+
+                    dur = rodar_bloco(client, itens_ctx, None, 1, registrar_sequencial,
+                                      medir_fn=medir_sequencial, sampler=sampler)
+                    meta["carga"].append({
+                        "rodada": rodada, "modo": "sequencial", "n": len(itens_ctx),
+                        "concorrencia": 1, "duracao_s": round(dur, 3),
+                        "vazao_rps": round(len(itens_ctx) / dur, 4) if dur else None,
+                    })
+
+        meta["resource_sampler"] = {
+            "interval_ms": args.resource_sample_ms, "gpu_metrics": args.gpu_metrics,
+            "regra_multi_gpu": "utilização média; memória e potência somadas",
+            "resumo_final": sampler.resumo(),
+        }
+        meta["modelos_carregados_ao_final"] = modelos_carregados(client, cfg.ollama_local)
 
     meta["fim_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    mpath = saida.with_name(saida.stem + ".metadados.json")
-    mpath.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Metadados gravados em {mpath}")
+    caminho_meta = saida.with_name(saida.stem + ".metadados.json")
+    caminho_meta.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Metadados gravados em {caminho_meta}")
 
 
 if __name__ == "__main__":

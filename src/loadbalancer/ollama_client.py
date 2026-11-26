@@ -6,6 +6,7 @@ import time
 import httpx
 
 from src.loadbalancer.schemas import OllamaCall
+from src.loadbalancer.usage import extract_usage
 
 
 class OllamaClient:
@@ -131,6 +132,7 @@ class OllamaClient:
             latency_s=latency_s,
             text=text,
             status_code=response.status_code,
+            **extract_usage(payload),
         )
 
     async def list_models(self) -> tuple[bool, list[str], str | None]:
