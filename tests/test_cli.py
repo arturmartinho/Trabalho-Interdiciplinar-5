@@ -67,3 +67,32 @@ def test_loadbalancer_le_as_classes_do_catalogo(monkeypatch, tmp_path):
     }
     assert registry.model_urls()["meu-complexo"] == "http://remoto:11434"
     assert registry.fallback_model() == "meu-reserva"
+
+
+def test_mesmo_modelo_pode_ter_dois_roles(monkeypatch, tmp_path):
+    _use_temp_db(monkeypatch, tmp_path)
+
+    assert AIModelDM.register("phi3.5", role="complexo", status="up")
+    assert AIModelDM.register("phi3.5", role="reserva", status="up")
+
+    rows = AIModelDM.list()
+    assert len(rows) == 2
+    assert {row["role"] for row in rows} == {"complexo", "reserva"}
+    assert registry.model_roles()["complexo"] == "phi3.5"
+    assert registry.fallback_model() == "phi3.5"
+
+
+def test_classificador_rele_catalogo_sem_reinicio(monkeypatch, tmp_path):
+    _use_temp_db(monkeypatch, tmp_path)
+    from src.loadbalancer.dispatcher import resolve_classifier
+
+    AIModelDM.register("modelo-a", role="simples", status="up")
+    classifier = resolve_classifier()
+    primeiro = classifier("Qual é a capital da França?")
+    assert primeiro.modelo == "modelo-a"
+
+    AIModelDM.register("modelo-b", role="simples", status="up")
+    # Desativa o primeiro; o classificador deve reler o catálogo na próxima chamada.
+    AIModelDM.register("modelo-a", role="simples", status="down")
+    segundo = classifier("Qual é a capital da França?")
+    assert segundo.modelo == "modelo-b"

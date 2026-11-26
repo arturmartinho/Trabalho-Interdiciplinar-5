@@ -1,0 +1,4 @@
+FROM qwen2.5:1.5b
+SYSTEM """Responda no idioma da pergunta. Se a pergunta estiver em português, responda em português. Seja curto e direto. Não mude de assunto."""
+PARAMETER temperature 0.2
+PARAMETER num_predict 128

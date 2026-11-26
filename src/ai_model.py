@@ -100,9 +100,13 @@ class AIModelDM(DataModel):
             row = super().read({"name": name}, many=False)
             if row:
                 return row
-            base = name.split(":")[0]
+
+            def base(tag: str) -> str:
+                return tag.split(":", 1)[0].strip().lower().split("/")[-1]
+
+            wanted = base(name)
             for candidate in super().read(many=True):
-                if candidate and candidate["name"].split(":")[0] == base:
+                if candidate and base(candidate["name"] or "") == wanted:
                     return candidate
         return None
 
@@ -187,7 +191,12 @@ class AIModelDM(DataModel):
                 if resp.status_code != 200:
                     return False
                 tags = resp.json().get("models", [])
-                return any(m.get("name", "").split(":")[0] == name.split(":")[0] for m in tags)
+
+                def base(tag: str) -> str:
+                    return tag.split(":", 1)[0].strip().lower().split("/")[-1]
+
+                wanted = base(name)
+                return any(base(m.get("name", "")) == wanted for m in tags)
             else:
                 # Remote: just check the URL is reachable
                 resp = requests.get(url, timeout=3)
@@ -498,13 +507,21 @@ class AIModelDM(DataModel):
         url: str,
         role: Optional[str] = None,
     ) -> None:
-        existing = super().read({"name": name, "type": type_}, many=False)
+        # Com role: uma linha por (name, type, role) — o mesmo modelo pode ser
+        # complexo e reserva ao mesmo tempo. Sem role: atualiza a 1ª ocorrência.
+        if role:
+            existing = super().read(
+                {"name": name, "type": type_, "role": role},
+                many=False,
+            )
+        else:
+            existing = super().read({"name": name, "type": type_}, many=False)
         if existing:
             updates = {"type": type_, "status": status, "url": url}
             if role:
                 updates["role"] = role
             super().update({"id": existing["id"]}, updates)
-            log.debug(f"Updated AI model '{name}' in DB.")
+            log.debug(f"Updated AI model '{name}' (role={role or existing.get('role')}) in DB.")
         else:
             super().create(
                 {
@@ -515,7 +532,7 @@ class AIModelDM(DataModel):
                     "role": role or "",
                 }
             )
-            log.debug(f"Inserted AI model '{name}' into DB.")
+            log.debug(f"Inserted AI model '{name}' (role={role or '-'}) into DB.")
 
     @staticmethod
     def _is_ollama_installed() -> bool:

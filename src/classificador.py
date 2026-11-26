@@ -2,8 +2,8 @@
 
 Decide para qual modelo uma requisição deve ir:
 
-- pedido curto e factual           -> AILO-152M-v2       (classe "simples")
-- pedido de código                 -> Qwen2.5-Coder-0.5B (classe "codigo")
+- pedido curto e factual           -> Qwen2.5 1.5B       (classe "simples")
+- pedido de código                 -> Qwen2.5-Coder-1.5B (classe "codigo")
 - pedido longo ou de raciocínio    -> Phi-3.5-mini       (classe "complexo")
 
 `classificar()` é uma função pura: mesma entrada, mesma saída, sem I/O.
@@ -26,8 +26,8 @@ load_dotenv()
 # --------------------------------------------------------------------------- #
 # Modelos (tags do Ollama; podem ser sobrescritas no .env)
 # --------------------------------------------------------------------------- #
-MODELO_SIMPLES = os.getenv("MODELO_SIMPLES", "ailo-152m-v2")
-MODELO_CODIGO = os.getenv("MODELO_CODIGO", "qwen2.5-coder:0.5b")
+MODELO_SIMPLES = os.getenv("MODELO_SIMPLES", "qwen2.5-simples:1.5b")
+MODELO_CODIGO = os.getenv("MODELO_CODIGO", "qwen2.5-coder:1.5b")
 MODELO_COMPLEXO = os.getenv("MODELO_COMPLEXO", "phi3.5")
 
 CLASSE_SIMPLES = "simples"
@@ -49,17 +49,27 @@ LIMITE_LONGO = 120   # acima disso, o pedido é "complexo" independente do tema
 # --------------------------------------------------------------------------- #
 # Sinais (comparados com o texto em minúsculas e sem acentos)
 # --------------------------------------------------------------------------- #
+# Evitar termos ambíguos isolados (programa/TV, api/banco, return/livro, classe/social).
 SINAIS_CODIGO: List[str] = [
     r"```",
     r"\bcodigo\b", r"\bcode\b", r"\bfuncao\b", r"\bfunction\b", r"\bmetodo\b",
-    r"\bclasse\b", r"\bscript\b", r"\bprograma\b", r"\bprogram\b",
+    r"\bscript\b",
+    r"\bprogram(?:ar|acao)\b",
+    r"\bprograma\s+(?:em|para|que)\b",
+    r"\bprograma\s+de\s+(?:computador|computacao|python|java|software)\b",
+    r"\bescreva\s+(?:um\s+)?programa\b",
     r"\bimplemente\b", r"\bimplementar\b", r"\bimplement\b", r"\brefator\w*",
     r"\bdebug\w*", r"\bbug\b", r"\bcompila\w*", r"\bstack ?trace\b",
-    r"\bregex\b", r"\bapi\b", r"\bendpoint\b",
+    r"\bregex\b", r"\bendpoint\b",
+    r"\b(?:rest|http|web)\s+api\b", r"\bapi\s+(?:rest|http|web|endpoint)\b",
+    r"\bcriar\s+(?:uma\s+)?api\b", r"\bimplemente\s+(?:uma\s+)?api\b",
     r"\bpython\b", r"\bjava\b", r"\bjavascript\b", r"\btypescript\b",
     r"\bc\+\+", r"\bc#", r"\brust\b", r"\bgolang\b", r"\bsql\b", r"\bhtml\b",
     r"\bcss\b", r"\bbash\b", r"\bpowershell\b",
-    r"\bdef \w+\(", r"\bclass \w+", r"\bimport \w+", r"\breturn\b",
+    r"\bdef \w+\(", r"\bclass \w+", r"\bclasse\s+\w+\s*[:\(]",
+    r"\bimport \w+",
+    # return de código (não "return o livro")
+    r"\breturn\s+(?:None|True|False|\d|[\[\(\{\"']|[a-z_][a-z0-9_]*\s*[=\(\[\+\-*/%])",
     r"\bprint\(", r"\bconsole\.log\b", r"\bselect .+ from\b",
 ]
 

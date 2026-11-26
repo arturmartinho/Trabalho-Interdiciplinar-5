@@ -94,3 +94,34 @@ def test_registra_no_log(capsys):
     assert f"classe={r.classe}" in saida
     assert f"modelo={r.modelo}" in saida
     assert "motivo=" in saida
+
+
+# --------------------------------------------------------------------------- #
+# Falsos positivos comuns (linguagem natural ≠ código)
+# --------------------------------------------------------------------------- #
+def test_programa_de_tv_nao_e_codigo():
+    assert classificar("Qual é o programa de TV mais famoso do Brasil?").classe == CLASSE_SIMPLES
+
+
+def test_api_do_banco_nao_e_codigo():
+    assert classificar("A api do banco central publica a taxa selic?").classe == CLASSE_SIMPLES
+
+
+def test_programa_de_exercicios_nao_e_codigo():
+    assert classificar("Meu programa de exercicios inclui corrida").classe == CLASSE_SIMPLES
+
+
+def test_return_o_livro_nao_e_codigo():
+    assert classificar("Quando voce vai me return o livro que emprestei?").classe == CLASSE_SIMPLES
+
+
+def test_classe_social_nao_e_codigo():
+    assert classificar("Qual classe social mais sofreu na pandemia?").classe == CLASSE_SIMPLES
+
+
+def test_criar_api_rest_ainda_e_codigo():
+    assert classificar("Crie uma API REST em FastAPI").classe == CLASSE_CODIGO
+
+
+def test_return_em_snippet_ainda_e_codigo():
+    assert classificar("Corrija: def foo(x): return x/0").classe == CLASSE_CODIGO

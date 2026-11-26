@@ -13,8 +13,12 @@ Classifier = Callable[[str], Any | Awaitable[Any]]
 
 
 def same_model(left: str, right: str) -> bool:
-    """Compara a família do modelo, ignorando o tag depois dos dois-pontos."""
-    return left.split(":", 1)[0].strip().lower() == right.split(":", 1)[0].strip().lower()
+    """Compara a família do modelo, ignorando namespace e o tag ``:tag``."""
+
+    def base(value: str) -> str:
+        return value.split(":", 1)[0].strip().lower().split("/")[-1]
+
+    return base(left) == base(right)
 
 
 def _url_for_model(model: str, model_urls: dict[str, str] | None) -> str | None:
@@ -176,9 +180,12 @@ def resolve_classifier() -> Classifier:
             "Esperado: função classificar(prompt) em src/classificador.py."
         ) from exc
 
-    modelos = model_roles()
-
     def classifier(prompt: str, prompt_id: str | None = None):
-        return classificar_e_registrar(prompt, prompt_id=prompt_id, modelos=modelos)
+        # Relê o catálogo a cada chamada para refletir register/update sem reinício.
+        return classificar_e_registrar(
+            prompt,
+            prompt_id=prompt_id,
+            modelos=model_roles(),
+        )
 
     return classifier

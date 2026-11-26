@@ -8,10 +8,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.loadbalancer.api import create_app
-from src.loadbalancer.dispatcher import dispatch
+from src.loadbalancer.dispatcher import dispatch, same_model
 from src.loadbalancer.ollama_client import OllamaClient
 from src.loadbalancer.schemas import Classification, ClassifierError, OllamaCall
 from src.loadbalancer.settings import FALLBACK_MODEL
+
+
+def test_same_model_ignora_namespace_e_tag():
+    assert same_model("Alieno/ailo-152m-v2", "ailo-152m-v2")
+    assert same_model("phi3.5", "phi3.5:latest")
+    assert same_model("Alieno/ailo-152m-v2:latest", "ailo-152m-v2")
+    assert not same_model("phi3.5", "qwen2.5-coder:0.5b")
 
 
 class FakeClient:

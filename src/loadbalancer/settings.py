@@ -31,8 +31,8 @@ OLLAMA_HOST = _env("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_TIMEOUT_S = float(_env("OLLAMA_TIMEOUT_SECONDS", "120"))
 
 # Mesmos nomes e tags de src/classificador.py (branch feat/classificador).
-MODEL_SIMPLE = _env_any(("MODELO_SIMPLES", "MODEL_SIMPLE"), "ailo-152m-v2")
-MODEL_CODE = _env_any(("MODELO_CODIGO", "MODEL_CODE"), "qwen2.5-coder:0.5b")
+MODEL_SIMPLE = _env_any(("MODELO_SIMPLES", "MODEL_SIMPLE"), "qwen2.5-simples:1.5b")
+MODEL_CODE = _env_any(("MODELO_CODIGO", "MODEL_CODE"), "qwen2.5-coder:1.5b")
 MODEL_REASONING = _env_any(("MODELO_COMPLEXO", "MODEL_REASONING"), "phi3.5")
 FALLBACK_MODEL = _env("FALLBACK_MODEL", MODEL_REASONING)
 
