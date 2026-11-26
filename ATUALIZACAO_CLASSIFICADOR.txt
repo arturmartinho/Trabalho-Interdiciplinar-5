@@ -1,0 +1,472 @@
+ATUALIZAÇÃO DO CLASSIFICADOR E DOS TESTES DE CARGA
+Branch: feat/artur (a partir da main em 74c71e7)
+Data: 26/11/2026
+
+======================================================================
+0. RESUMO EM 30 SEGUNDOS
+======================================================================
+
+Pedidos:
+  1. Atualizar o classificador: usar tokens e modelos de IA.
+  2. Aumentar a carga dos testes com prompts mais complexos, gerados por
+     IA e variados em tipo, linguagem de programação e idioma.
+
+Feito:
+  - O tamanho do prompt agora é medido em tokens do Phi-3.5, e não em
+    palavras. Os limites passaram de 25/120 palavras para 50/240 tokens.
+  - O classificador tem três estratégias:
+      regras  - as regras de antes, agora em tokens
+      ml      - modelo treinado (TF-IDF ou embeddings + Regressão Logística)
+      hibrido - sintaxe de código decide direto; o modelo treinado decide o
+                resto; com confiança baixa valem as regras; e duas travas de
+                segurança (ver 2.4).
+  - Um gerador de prompts por IA (gemma4:e4b no Ollama) produziu 713
+    prompts em 3 classes, 27 subtipos, 12 linguagens de programação e 3
+    idiomas (pt/en/es), com casos difíceis de propósito.
+  - O conjunto foi dividido em treino (505) e teste (208), e há um
+    subconjunto para o experimento de latência (160 prompts).
+  - O experimento ganhou um modo carga (--concorrencia N), que mede vazão
+    em req/s, e o relatório ganhou tabelas por idioma e por subtipo.
+  - Há um script de avaliação que compara regras, ML, híbrido e um LLM
+    usado como classificador.
+  - Os testes automatizados subiram para 76, e todos passam.
+
+Resultado principal, conjunto de teste (208 prompts gerados):
+  - regras (classificador antigo, em palavras): 79,8% de acurácia
+  - hibrido com TF-IDF (padrão do .env):         94,2%
+  - ml com embeddings:                           98,1%
+  - Nos 40 prompts manuais, regras e híbrido acertam 100%.
+
+O QUE FALTA, para quem continuar: o experimento de latência com os modelos
+reais. Ver a seção 7.
+
+======================================================================
+1. CONTAGEM EM TOKENS
+======================================================================
+
+Arquivo novo: src/texto.py
+
+Por que mudar: o custo de um prompt para o modelo (tempo de prefill e
+limite de contexto) cresce com tokens, não com palavras. E a razão entre
+palavras e tokens muda muito entre idiomas e entre texto e código:
+"def f(x): return x**2" tem 5 palavras e uns 12 tokens.
+
+Como funciona:
+  - TOKENIZADOR=microsoft/Phi-3.5-mini-instruct (no .env). O tokenizador
+    do Hugging Face é baixado uma vez e depois lido do cache local.
+  - Também aceita o caminho de um tokenizer.json ou "estimativa".
+  - Sem rede ou sem o pacote "tokenizers", cai para a estimativa por
+    caracteres (0,343 token/caractere, calibrada nos 40 prompts manuais)
+    e registra um aviso uma única vez.
+  - Calibração: o português dá cerca de 2,0 tokens por palavra no Phi-3.5.
+    Por isso 25/120 palavras viraram 50/240 tokens.
+
+======================================================================
+2. CLASSIFICADOR
+======================================================================
+
+Arquivos: src/classificador.py (reescrito) e src/classificador_ml.py (novo).
+A estratégia vem de CLASSIFICADOR no .env (regras | ml | hibrido) ou de
+--estrategia no comando classify.
+
+2.1 regras
+  São as mesmas de antes, agora em tokens. A primeira que casar decide:
+    1. vazio                         -> simples
+    2. mais de 240 tokens            -> complexo
+    3. sinal de código (regex)       -> codigo
+    4. sinal de raciocínio (regex)   -> complexo
+    5. até 50 tokens, sem sinais     -> simples
+    6. resto (ambíguo)               -> complexo
+  Novidade: sinais de raciocínio em espanhol (explica, paso a paso,
+  demuestra, analiza, resuelve, justifica, argumenta).
+
+2.2 ml
+  Regressão Logística (class_weight=balanced), com o C escolhido por
+  validação cruzada estratificada em 5 dobras (F1-macro), sobre dois tipos
+  de feature:
+    - tfidf: TF-IDF de palavras (1-2 gramas, texto sem acento) + TF-IDF de
+      n-gramas de caracteres (2-5), que pegam {, ;, (), ->. Roda em ~2 ms,
+      sem rede.
+    - embed: embeddings de frase do Ollama (paraphrase-multilingual, via
+      /api/embed) + log do número de tokens. Custa ~450 ms por prompt em
+      CPU e ocupa mais um modelo na memória. No balancer, a chamada roda
+      fora do event loop (asyncio.to_thread).
+  O modelo é salvo em modelos/classificador_<features>.joblib, com os
+  metadados (data, C, acurácias, versões) no .json ao lado.
+
+2.3 Por que o TF-IDF não usa o tamanho como feature
+  Nos dados gerados, quase todo prompt complexo é longo. Com o tamanho
+  como feature, o modelo aprendeu o atalho "curto = simples":
+  "Prove que existem infinitos números primos." saía simples com 77% de
+  confiança. Tirar a feature melhorou o TF-IDF:
+    com tamanho: teste 93,3% | manuais 95,0%
+    sem tamanho: teste 94,2% | manuais 97,5%
+  No modelo de embeddings, o tamanho ajuda (manuais 97,5% com, 92,5% sem),
+  então lá ele ficou.
+
+2.4 hibrido (padrão no .env)
+  Passos, nesta ordem:
+    1. Sintaxe de código de fato (```, def f(, import x, SELECT ... FROM ...
+       WHERE, Traceback, ; no fim da linha, function(, => {, etc.) -> codigo,
+       sem consultar o modelo.
+    2. Senão, decide o modelo treinado.
+    3. Se a confiança do modelo for menor que CLASSIFICADOR_LIMIAR (0,55),
+       valem as regras.
+    4. Trava 1: mais de 240 tokens nunca vai para simples (limite de
+       contexto do AILO).
+    5. Trava 2 (nova): se o modelo disser simples, mas houver sinal
+       explícito de raciocínio ("prove", "passo a passo", "por que",
+       "compare"...), vale complexo.
+  Motivo da trava 2: os dois modelos treinados ainda tendem a mandar
+  pedidos curtos de raciocínio para o simples, porque o viés está nos
+  dados. Subdimensionar (mandar para um modelo menor) compromete a
+  resposta. Superdimensionar só custa latência.
+
+  Se o modelo treinado não existir ou o scikit-learn não estiver
+  instalado, ml e hibrido usam as regras e dizem isso no campo "motivo".
+  O GET /health mostra a estratégia, o tokenizador e o modelo carregado,
+  no campo "classifier".
+
+2.5 Exemplos (python -m src classify --estrategia hibrido --prompt "...")
+  "Qual é a capital do Japão?"                     -> simples
+  "Prove que existem infinitos números primos."    -> complexo (trava 2)
+  "Explique passo a passo por que o céu é azul."   -> complexo (trava 2)
+  "Who created Python?"                            -> simples
+                                                      (as regras diriam código)
+  "como ordeno uma lista de pessoas pela idade?"   -> depende do modelo; é o
+                                                      caso mais difícil
+
+======================================================================
+3. CONJUNTO DE PROMPTS GERADO POR IA
+======================================================================
+
+Arquivo novo: experiments/gerar_prompts.py
+Comando: python -m src generate-prompts
+
+3.1 Matriz de geração
+  O conjunto cruza classe x subtipo x idioma, e linguagem de programação
+  quando faz sentido:
+    simples  (10 subtipos): factual, tradução, conversão, aritmética,
+             sentimento, gramática, definição, reescrita, conversa,
+             termo_tecnico*
+    codigo   (8 subtipos):  escrever_funcao, debug (com o código e o erro
+             no próprio prompt), refatorar, explicar_codigo,
+             consulta_sql_regex, testes, ferramentas, sem_palavra_chave*
+    complexo (9 subtipos):  prova, lógica, multietapas, comparação,
+             argumentação, explicação_profunda, planejamento, resumo_texto
+             (com o texto longo dentro do prompt), curto_dificil*
+    * casos difíceis (adversariais), feitos para enganar as regras:
+      termo_tecnico     - "Quem criou o Python?" é simples, apesar do
+                          "Python"
+      sem_palavra_chave - "como ordeno uma lista pela idade?" é código, sem
+                          dizer "código"
+      curto_dificil     - "Prove a hipótese X" é curto, mas é complexo
+  Idiomas: pt, en, es.
+  Linguagens: Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Rust,
+  SQL, Bash, PHP.
+  Total: 96 células da matriz.
+
+3.2 Como foi gerado
+  - Modelo: gemma4:e4b-it-qat no Ollama (CPU), temperatura 0,9, seed 42.
+  - A saída é forçada por JSON Schema (format do Ollama), com think=false.
+  - O pedido ao gerador exige prompts autocontidos: se fala de "este
+    código", o código tem de estar no prompt.
+  - A geração é retomável: cada célula é gravada em
+    experiments/dados/prompts_gerados_bruto.jsonl, e uma nova execução
+    pula as células já feitas.
+  - Correção feita durante a geração: às vezes o gemma juntava vários
+    prompts numa única string e a célula voltava com 1 ou 2 itens. Agora,
+    um lote com menos de 60% do pedido é refeito com outra seed (até 3
+    tentativas), e fica o melhor resultado. As 12 células afetadas foram
+    refeitas.
+  - Tempo: cerca de 1h30 em CPU.
+
+3.3 Finalização (automática no fim da geração ou com --so-finalizar)
+  - Remove prompts curtos demais (4), duplicatas exatas, quase-duplicatas
+    (cosseno de TF-IDF de caracteres >= 0,9) e cópias dos 40 prompts
+    manuais.
+  - Aplica a revisão manual: os ids em experiments/dados/descartados.json
+    saem do conjunto.
+  - Faz o split treino/teste 70/30, estratificado por classe x subtipo x
+    idioma.
+  - Monta o prompts_experimento.json: os 40 manuais + 40 de teste por
+    classe, alternando subtipo e idioma.
+  - Os ids são estáveis (hash do conteúdo): G{S|C|X}-xxxxxx.
+
+3.4 Revisão manual
+  Revisei amostras de todos os subtipos e a lista completa de
+  termo_tecnico e curto_dificil. Descartei 6 prompts com rótulo errado,
+  todos de curto_dificil:
+    - pedidos de código (GX-19939e, GX-a9e3db)
+    - perguntas triviais que seriam simples: "7 é primo?", "(5*3)+(12/4)",
+      "2^x=1024" e uma factual (GX-1bcfc7, GX-51e570, GX-1d70a5, GX-404658)
+  Observação: o subtipo "sentimento" saiu mais como mensagens emocionais
+  do que como "classifique o sentimento". Continuam sendo simples.
+
+3.5 Números finais
+  Brutos 723 -> finais 713
+    (4 curtos demais, 6 descartados na revisão, 0 duplicatas)
+  Por classe:  simples 300 | codigo 230 | complexo 183
+  Por idioma:  pt 240 | en 241 | es 232
+  Por split:   treino 505 | teste 208
+  Casos difíceis: 102 (termo_tecnico 30, sem_palavra_chave 48,
+                  curto_dificil 24 depois da revisão)
+  Experimento: 160 prompts (40 manuais + 120 gerados)
+
+Arquivos de dados:
+  experiments/prompts_gerados.json             conjunto final com split
+  experiments/prompts_gerados.metadados.json   gerador, seed, contagens e
+                                               template
+  experiments/prompts_experimento.json         subconjunto do experimento
+  experiments/dados/prompts_gerados_bruto.jsonl  saída crua do gerador
+  experiments/dados/descartados.json           ids removidos na revisão
+
+======================================================================
+4. TREINO
+======================================================================
+
+Arquivo novo: experiments/treinar_classificador.py
+Comandos:
+  python -m src train-classifier
+  python -m src train-classifier --features embed
+
+O treino usa o split de treino, escolhe o C por validação cruzada na
+grade [0,5, 1, 2, 4, 8, 16, 32] e avalia no teste e nos 40 manuais.
+
+                  C   F1 (CV)   acurácia teste   acurácia manuais
+  tfidf           16  0,931     94,2%            97,5%
+  embed           2   0,974     98,1%            97,5%
+
+Os dois modelos estão versionados em modelos/ (1,4 MB no total). Quem
+continuar não precisa treinar de novo. Foram gerados com scikit-learn
+1.9.1; em outra versão o joblib pode avisar ou falhar, e aí basta
+retreinar (~1 min).
+
+======================================================================
+5. AVALIAÇÃO DAS ESTRATÉGIAS
+======================================================================
+
+Arquivo novo: experiments/avaliar_classificador.py
+Comando:
+  python -m src eval-classifier [--llm gemma4:e4b-it-qat --llm-max 60]
+Saída: experiments/relatorio_classificador.md (versionado) e
+graficos/grafico_classificadores.png.
+
+"Subdim." = foi para um modelo menor que o necessário (risco de
+qualidade). "Superdim." = foi para um maior (custo de latência).
+
+Conjunto de TESTE (208 prompts gerados; o LLM rodou numa amostra de 60):
+
+  estratégia         acurácia  F1     subdim.  superdim.  tempo/prompt
+  regras_palavras    79,8%     0,783   8,6%    11,5%       0,2 ms
+  regras (tokens)    78,4%     0,768  12,0%     9,6%       ~1 ms
+  ml_tfidf           94,2%     0,936   2,9%     2,9%       2 ms
+  hibrido_tfidf      94,2%     0,934   3,4%     2,4%       5 ms
+  ml_embed           98,1%     0,979   1,4%     0,5%       ~440 ms
+  hibrido_embed      96,2%     0,957   2,4%     1,4%       ~440 ms (*)
+  llm gemma4:e4b     86,7%     0,823   1,7%    11,7%       ~4100 ms
+
+Conjunto MANUAL (40 prompts escritos à mão):
+
+  regras_palavras 100% | regras 100% | ml_tfidf 97,5% | hibrido_tfidf 100%
+  ml_embed 97,5% | hibrido_embed 100% | llm gemma4 97,5%
+
+(*) No relatório desta rodada, hibrido_embed aparece com ~1,5 ms porque
+reaproveitou o cache de embeddings do ml_embed. O custo real é o do
+ml_embed. O script já foi corrigido e passa a limpar o cache entre as
+estratégias. Há uma nota sobre isso no relatório.
+
+Leitura dos resultados:
+  - As regras acertam 100% dos manuais, mas só 78-80% do conjunto gerado.
+    Os 40 manuais eram fáceis demais para medir o classificador. Nos
+    casos difíceis, as regras acertam 12,5%; ml_embed acerta 100%.
+  - Por subtipo, as regras erram justamente os casos que deveriam errar:
+      termo_tecnico 0%, sem_palavra_chave 13%, curto_dificil 25%
+      argumentação 50%
+    O ML acerta esses casos.
+  - A troca de palavras por tokens não mudou a acurácia das regras
+    (79,8% x 78,4%). O ganho vem do modelo treinado.
+  - Um LLM grande como classificador (gemma 4B) é pior e 1000x mais lento
+    que o TF-IDF. Ele superdimensiona bastante: manda para complexo o que
+    é simples. Não compensa num load balancer cujo objetivo é reduzir
+    latência.
+  - Padrão escolhido: hibrido + TF-IDF. Ganha 15 pontos sobre as regras,
+    custa ~5 ms por prompt, não usa rede e não ocupa RAM no Ollama, e
+    mantém 100% nos manuais. Para trocar por embeddings:
+      CLASSIFICADOR_MODELO=modelos/classificador_embed.joblib
+    São +2-4 pontos no teste, por ~450 ms a mais por requisição em CPU.
+
+Limitações (importante para o artigo):
+  - O rótulo de cada prompt gerado é a classe pedida ao gerador, não uma
+    anotação humana. Revisei uma amostra, não o conjunto inteiro.
+  - Treino e teste vêm do mesmo gerador e do mesmo template, então a
+    acurácia no teste tende a ser otimista. Os 40 manuais são a medida
+    fora da distribuição, mas são poucos e fáceis.
+  - Viés de tamanho nos dados: os prompts complexos gerados são quase
+    todos longos. A trava 2 do híbrido contorna isso. A correção de
+    verdade seria gerar mais prompts complexos curtos e mais pedidos de
+    código curtos sem sintaxe.
+
+======================================================================
+6. MODO CARGA NO EXPERIMENTO DE LATÊNCIA
+======================================================================
+
+Arquivos: experiments/rodar_experimento.py, analisar.py e
+executar_rodada.sh.
+
+  - --concorrencia N: N requisições simultâneas, via ThreadPoolExecutor.
+  - Cada rodada roda um bloco por cenário (baseline e proposta), com a
+    mesma ordem embaralhada de prompts, e alterna qual cenário vai
+    primeiro a cada rodada.
+  - Mede a duração de cada bloco e a vazão (req/s), gravadas em
+    resultados.metadados.json, no campo "carga".
+  - Com --concorrencia 1 (padrão), o comportamento é o de antes:
+    sequencial e intercalado.
+  - O CSV ganhou as colunas concorrencia, idioma, subtipo e linguagem.
+  - O analisar.py ganhou tabelas por idioma e por subtipo e a seção
+    "5b. Vazão sob carga".
+  - O executar_rodada.sh aceita as variáveis PROMPTS (conjunto) e CONC
+    (concorrência).
+
+Validado de ponta a ponta com um Ollama falso: o balancer de verdade,
+--concorrencia 4, 160 requisições, 0 falhas, e o relatório saiu com a
+seção de vazão.
+
+======================================================================
+7. O QUE FALTA: EXPERIMENTO DE LATÊNCIA COM OS MODELOS REAIS
+======================================================================
+
+Ainda não foi rodado. Na minha máquina, a CPU estava ocupada gerando
+prompts, e isso distorceria as latências.
+
+Pré-requisitos:
+  pip install -e ".[dev,ml,experiments]"
+  ollama pull Alieno/ailo-152m-v2
+  ollama pull qwen2.5-coder:0.5b
+  ollama pull phi3.5
+  (O tokenizador do Phi-3.5 é baixado sozinho no primeiro uso.)
+
+Passo a passo (Git Bash, na raiz do repositório):
+  1. Defina o limite de tokens da resposta. O executar_rodada.sh exige
+     isso, e sem limite o phi3.5 pode levar mais de 1 min por resposta em
+     CPU:
+       echo 'OLLAMA_NUM_PREDICT=128' >> .env
+
+  2. Para o modo carga, suba o Ollama aceitando paralelismo e os 3
+     modelos carregados ao mesmo tempo:
+       OLLAMA_NUM_PARALLEL=4 OLLAMA_MAX_LOADED_MODELS=3 ollama serve
+
+  3. Em outro terminal, suba o balancer, DEPOIS do passo 1:
+       python -m src serve
+     Confira em http://127.0.0.1:8000/health se o campo "classifier"
+     mostra estrategia=hibrido e modelo_ml.carregado=true.
+
+  4. Rodada curta para validar (1 repetição, 1 aquecimento, sequencial):
+       cd experiments
+       PROMPTS=prompts_experimento.json ./executar_rodada.sh 1 1
+
+  5. Rodada principal, sequencial (mede latência por requisição):
+       PROMPTS=prompts_experimento.json ./executar_rodada.sh 3 2
+
+  6. Rodada em modo carga (mede vazão):
+       PROMPTS=prompts_experimento.json CONC=4 ./executar_rodada.sh 2 1
+
+  Cada rodada nova move o CSV anterior para experiments/anteriores/.
+  Guarde as pastas e os relatórios de cada uma.
+
+Tempo estimado em CPU (160 prompts x 2 cenários por repetição):
+  - Passo 4: ~30-50 min.
+  - Passo 5: proporcional; 3 repetições somam umas 2-3 h.
+  - Com GPU, bem menos.
+  Se precisar de algo mais rápido, use PROMPTS=prompts.json (só os 40
+  manuais).
+
+O que olhar no relatorio_resultados.md:
+  - a redução de latência média e P95 da proposta em relação ao baseline
+    (baseline = tudo direto no phi3.5);
+  - a acurácia de roteamento real;
+  - as tabelas por idioma e por subtipo;
+  - a vazão (seção 5b);
+  - os desvios para o fallback.
+
+======================================================================
+8. ARQUIVOS
+======================================================================
+
+Novos:
+  src/texto.py                          tokens e normalização
+  src/classificador_ml.py               pipeline TF-IDF/embeddings + LR,
+                                        salvar e carregar
+  experiments/gerar_prompts.py          geração por IA, deduplicação,
+                                        split e subconjunto
+  experiments/treinar_classificador.py  treino com validação cruzada
+  experiments/avaliar_classificador.py  comparação das estratégias e
+                                        relatório
+  experiments/prompts_gerados.json, prompts_gerados.metadados.json,
+  experiments/prompts_experimento.json, experiments/relatorio_classificador.md
+  experiments/dados/prompts_gerados_bruto.jsonl, descartados.json
+  modelos/classificador_tfidf.joblib/.json, classificador_embed.joblib/.json
+  tests/test_classificador_ml.py, tests/test_experimentos.py
+  ATUALIZACAO_CLASSIFICADOR.txt         este arquivo
+
+Alterados:
+  src/classificador.py           três estratégias, tokens, sinais fortes,
+                                 travas do híbrido
+  src/cli.py                     classify --estrategia; comandos
+                                 generate-prompts, train-classifier e
+                                 eval-classifier
+  src/loadbalancer/dispatcher.py prepara o classificador na subida; o
+                                 embed roda fora do event loop
+  src/loadbalancer/api.py        classificador carregado no startup; campo
+                                 "classifier" no /health
+  experiments/rodar_experimento.py  --concorrencia, blocos por cenário,
+                                    vazão, colunas novas
+  experiments/analisar.py        tabelas por idioma e subtipo, seção de
+                                 vazão
+  experiments/executar_rodada.sh variáveis PROMPTS e CONC
+  tests/conftest.py              os testes usam regras + estimativa,
+                                 independente do .env
+  tests/test_loadbalancer_integracao.py  ambiente do subprocesso isolado
+                                         do .env
+  pyproject.toml, requirements.txt  extra "ml": scikit-learn, joblib,
+                                    numpy, tokenizers
+  .env, .env.example             CLASSIFICADOR, CLASSIFICADOR_MODELO,
+                                 CLASSIFICADOR_LIMIAR, TOKENIZADOR,
+                                 MODELO_GERADOR
+  .gitignore                     caches de embeddings, logs, backup do
+                                 bruto e avaliacao_classificador.json
+  README.md                      seções do classificador, do conjunto de
+                                 prompts e do modo carga
+
+Ficam fora do git (gerados localmente):
+  - experiments/dados/cache_*.npz  (cache de embeddings)
+  - experiments/dados/log_*.txt
+  - graficos/
+  - avaliacao_classificador.json
+
+======================================================================
+9. TESTES
+======================================================================
+
+  python -m pytest -q   ->  76 passed
+
+Cobrem:
+  - tokens: estimativa, tokenizer.json local e fallback;
+  - regras em palavras e em tokens;
+  - salvar e carregar o modelo;
+  - as estratégias ml e hibrido: sintaxe de código, modelo ausente,
+    confiança baixa, prompt longo, trava de raciocínio em pt/en/es;
+  - sinais fortes, positivos e negativos;
+  - o classificador assíncrono no dispatcher e o CLI;
+  - gerador: matriz, limpeza, quase-duplicatas, split, subconjunto,
+    finalização de ponta a ponta e o refazer de lote incompleto;
+  - modo carga: alternância de cenários e execução em paralelo;
+  - integração com o balancer real e com o Ollama real (o teste do
+    Ollama real só roda se os três modelos estiverem instalados).
+
+Comandos úteis:
+  python -m src classify --estrategia hibrido --prompt "..." [--json]
+  python -m src generate-prompts --listar-celulas
+  python -m src generate-prompts --so-finalizar --amostra-revisao 30
+  python -m src train-classifier [--features embed]
+  python -m src eval-classifier [--llm <tag> --llm-max 60]

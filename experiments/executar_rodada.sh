@@ -3,11 +3,14 @@
 # Uso (com a venv ativa, balancer rodando em outro terminal):
 #   ./executar_rodada.sh            # 3 repetições, 2 passadas de aquecimento
 #   ./executar_rodada.sh 1 1        # rodada curta de teste
+#   PROMPTS=prompts_experimento.json CONC=4 ./executar_rodada.sh 2 2   # conjunto maior, modo carga
 set -euo pipefail
 cd "$(dirname "$0")"
 REP="${1:-3}"
 AQ="${2:-2}"
 PY="${PYTHON:-python}"
+PROMPTS="${PROMPTS:-prompts.json}"
+CONC="${CONC:-1}"
 
 "$PY" -c "import httpx, numpy, matplotlib, dotenv" 2>/dev/null || {
   echo "ERRO: ative a venv e instale: pip install matplotlib numpy"; exit 1; }
@@ -28,7 +31,7 @@ if [ -s resultados.csv ]; then
   echo "CSV anterior guardado em anteriores/resultados_$TS.csv"
 fi
 
-"$PY" rodar_experimento.py --repeticoes "$REP" --aquecimento "$AQ" | tee log_rodada.txt
+"$PY" rodar_experimento.py --repeticoes "$REP" --aquecimento "$AQ" --prompts "$PROMPTS" --concorrencia "$CONC" | tee log_rodada.txt
 "$PY" analisar.py | tee -a log_rodada.txt
 echo
 echo "Pronto. Envie para a revisão: resultados.csv, resultados.metadados.json, relatorio_resultados.md e graficos/"

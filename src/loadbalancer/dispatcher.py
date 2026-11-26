@@ -1,5 +1,6 @@
 """Despacho: classifica o prompt, chama o Ollama e aplica o fallback."""
 
+import asyncio
 import inspect
 import time
 import uuid
@@ -172,7 +173,7 @@ def resolve_classifier() -> Classifier:
     continuam usando as tags do ambiente (``MODELO_*``).
     """
     try:
-        from src.classificador import classificar_e_registrar
+        from src.classificador import classificar_e_registrar, preparar, usa_rede
         from src.loadbalancer.registry import model_roles
     except ImportError as exc:
         raise ClassifierError(
@@ -180,6 +181,24 @@ def resolve_classifier() -> Classifier:
             "Esperado: função classificar(prompt) em src/classificador.py."
         ) from exc
 
+<<<<<<< HEAD
+=======
+    modelos = model_roles()
+    # Carrega tokenizador e modelo treinado agora, não na primeira requisição medida.
+    estado = preparar()
+    info(f"classificador pronto: {estado}")
+
+    if usa_rede():
+        # Embeddings fazem uma chamada HTTP: roda fora do event loop para não
+        # bloquear as outras requisições em andamento.
+        async def classifier_async(prompt: str, prompt_id: str | None = None):
+            return await asyncio.to_thread(
+                classificar_e_registrar, prompt, prompt_id=prompt_id, modelos=modelos
+            )
+
+        return classifier_async
+
+>>>>>>> feat/artur
     def classifier(prompt: str, prompt_id: str | None = None):
         # Relê o catálogo a cada chamada para refletir register/update sem reinício.
         return classificar_e_registrar(

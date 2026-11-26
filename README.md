@@ -22,7 +22,7 @@ Sistemas de IA em produção costumam enviar **toda** requisição — simples o
 Este projeto propõe um **Load Balancer** que:
 
 1. **Mantém um catálogo** de modelos locais e remotos, com a classe que cada um atende;
-2. **Classifica** cada prompt pela complexidade (regras determinísticas);
+2. **Classifica** cada prompt pela complexidade (regras, modelo treinado ou híbrido, com tamanho medido em tokens);
 3. **Encaminha** para o modelo mais adequado entre os registrados:
    - `AILO-152M-v2` → prompts **simples** (curtos, factuais)
    - `Qwen2.5-Coder-0.5B` → prompts de **código**
@@ -45,7 +45,7 @@ flowchart TB
     end
 
     subgraph APLICACAO["Aplicação / serviço"]
-        CLASS["Classificador<br/>src/classificador.py"]
+        CLASS["Classificador<br/>src/classificador.py<br/>(+ classificador_ml.py, texto.py)"]
         LB["Despacho · API FastAPI · Cliente Ollama<br/>src/loadbalancer/"]
     end
 
@@ -97,16 +97,25 @@ sequenceDiagram
 ├── docs/                    # Cronograma e seções auxiliares
 ├── presentation/            # Slides
 ├── experiments/             # Scripts e dados do experimento
-│   ├── rodar_experimento.py
+│   ├── rodar_experimento.py      # baseline x proposta (sequencial ou --concorrencia N)
 │   ├── analisar.py
-│   ├── prompts.json
+│   ├── gerar_prompts.py          # gera o conjunto rotulado com um LLM
+│   ├── treinar_classificador.py  # treina o classificador ML
+│   ├── avaliar_classificador.py  # regras x ML x híbrido (x LLM)
+│   ├── prompts.json              # 40 prompts escritos à mão
+│   ├── prompts_gerados.json      # conjunto gerado (treino/teste)
+│   ├── prompts_experimento.json  # 40 manuais + subconjunto estratificado do teste
+│   ├── dados/                    # respostas brutas do gerador (retomável)
 │   └── executar_rodada.sh
+├── modelos/                 # classificador treinado (.joblib + metadados .json)
 ├── src/
 │   ├── __main__.py          # `python -m src`
 │   ├── cli.py               # CLI unificada (models, serve, infer, ...)
 │   ├── ai_model.py          # Catálogo de modelos (camada de domínio)
 │   ├── data_access.py       # SQLite (camada de dados)
-│   ├── classificador.py     # Classificador por regras
+│   ├── classificador.py     # Estratégias regras / ml / hibrido
+│   ├── classificador_ml.py  # TF-IDF ou embeddings + Regressão Logística
+│   ├── texto.py             # Normalização e contagem de tokens
 │   ├── log.py               # Logging colorido
 │   └── loadbalancer/
 │       ├── api.py           # Endpoints FastAPI
@@ -118,11 +127,12 @@ sequenceDiagram
 ├── tests/
 │   ├── test_cli.py
 │   ├── test_classificador.py
+│   ├── test_classificador_ml.py
+│   ├── test_experimentos.py
 │   ├── test_loadbalancer.py
 │   ├── test_loadbalancer_integracao.py
 │   └── test_loadbalancer_ollama_real.py
 ├── .env.example
-├── CHANGELOG.md
 ├── pyproject.toml
 ├── requirements.txt
 └── README.md
@@ -179,11 +189,13 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-Para rodar os experimentos (gráficos e métricas de RAM), instale também o extra:
+Para o classificador treinado e a contagem de tokens (`scikit-learn`, `tokenizers`) e para os experimentos (gráficos e métricas de RAM), instale também os extras:
 
 ```bash
-pip install -e ".[dev,experiments]"
+pip install -e ".[dev,ml,experiments]"
 ```
+
+Sem o extra `ml`, o balancer continua funcionando com as regras e uma estimativa de tokens.
 
 Alternativa sem instalação editável:
 
@@ -229,11 +241,14 @@ python -m src models --help
 | `models stop` / `models resume` | Descarrega / recarrega um modelo local |
 | `models call` | Envia um prompt direto a um modelo do catálogo |
 | `models remove` | Remove um modelo do catálogo |
-| `classify` | Mostra a classe e o modelo escolhido para um prompt |
+| `classify` | Mostra a classe, o modelo, os tokens e o motivo para um prompt (`--estrategia`) |
 | `infer` | Executa uma inferência pelo load balancer |
 | `serve` | Sobe a API HTTP do load balancer |
 | `experiment` | Roda baseline + proposta e grava `resultados.csv` |
 | `analyze` | Gera métricas, gráficos e relatório a partir do CSV |
+| `generate-prompts` | Gera o conjunto de prompts rotulados com um LLM do Ollama |
+| `train-classifier` | Treina o classificador ML a partir do conjunto gerado |
+| `eval-classifier` | Compara regras × ML × híbrido (× LLM) em acurácia e tempo |
 
 ### Registrar os três modelos
 
@@ -300,6 +315,7 @@ Use `--json` para ver classe, modelo escolhido, modelo que atendeu, redirecionam
 
 ```bash
 python -m src classify --prompt "Explique passo a passo por que o céu é azul." --json
+python -m src classify --prompt "como ordeno uma lista pela idade?" --estrategia hibrido
 ```
 
 ### Rodar os testes
@@ -393,24 +409,83 @@ Compatível com o formato OpenAI (simplificado). O campo `model` é **ignorado**
 
 ## 🧠 Classificador de prompts
 
-Arquivo: `src/classificador.py`. Função pura `classificar(prompt, modelos=None)` — mesma entrada, mesma saída.
+Arquivos: `src/classificador.py` (estratégias), `src/classificador_ml.py` (modelo treinado) e `src/texto.py` (tokens). A estratégia vem de `CLASSIFICADOR` no `.env` (`regras`, `ml` ou `hibrido`) ou de `--estrategia` no `classify`.
 
-**Regras (a primeira que casar decide):**
+### Tamanho em tokens
+
+O tamanho do prompt é medido em **tokens do Phi-3.5** (`TOKENIZADOR=microsoft/Phi-3.5-mini-instruct`), não em palavras. O custo para o modelo (prefill, limite de contexto) cresce com tokens, e a razão palavras/tokens muda entre idiomas e entre texto e código. O tokenizador é baixado do Hugging Face uma vez e depois lido do cache. Sem rede ou sem o pacote `tokenizers`, vale uma estimativa por caracteres (~0,34 token/caractere, calibrada nos 40 prompts manuais). Os limites antigos de 25 e 120 palavras viraram **50 e 240 tokens** (~2 tokens por palavra em português).
+
+### Estratégia `regras`
+
+Regras determinísticas (a primeira que casar decide):
 
 | # | Condição | Classe | Modelo padrão |
 |---|----------|--------|---------------|
 | 1 | Prompt vazio | `simples` | AILO |
-| 2 | Mais de **120 palavras** | `complexo` | Phi |
+| 2 | Mais de **240 tokens** | `complexo` | Phi |
 | 3 | Sinal de **código** | `codigo` | Qwen |
 | 4 | Sinal de **raciocínio** | `complexo` | Phi |
-| 5 | Até **25 palavras**, sem sinais | `simples` | AILO |
+| 5 | Até **50 tokens**, sem sinais | `simples` | AILO |
 | 6 | Demais casos (ambíguo) | `complexo` | Phi |
 
-**Casos ambíguos tratados:**
-- Código + raciocínio → **código tem prioridade** (o modelo especializado conhece melhor o domínio)
-- Tamanho médio sem sinais → **Phi** (errar pro maior aumenta latência, mas não compromete a resposta)
+- Código + raciocínio → **código tem prioridade** (o modelo especializado conhece melhor o domínio).
+- Tamanho médio sem sinais → **Phi** (errar para o maior aumenta latência, mas não compromete a resposta).
 
-O parâmetro opcional `modelos` permite substituir os destinos do `.env` pelos modelos registrados no catálogo. É assim que o load balancer usa o `ai_model`.
+### Estratégia `ml`
+
+Regressão Logística sobre:
+- **`tfidf`** (padrão): TF-IDF de palavras + n-gramas de caracteres (pegam a sintaxe de código: `{`, `;`, `()`). Classifica em cerca de 1 ms, sem rede e sem RAM extra no Ollama. Não usa o tamanho do prompt como feature: nos dados gerados quase todo pedido complexo é longo, e com essa feature o modelo aprendia "curto = simples" (nos 40 manuais: 95% com, 97,5% sem).
+- **`embed`**: embeddings de frase do Ollama (`/api/embed`, padrão `paraphrase-multilingual`) + log dos tokens. Lida melhor com paráfrases, mas faz uma chamada HTTP por prompt e ocupa mais um modelo em memória. No balancer, essa chamada roda fora do event loop.
+
+O modelo é treinado com `python -m src train-classifier` e salvo em `modelos/classificador_<features>.joblib`, com metadados em `.json`. O C é escolhido por validação cruzada.
+
+### Estratégia `hibrido` (recomendada)
+
+1. Sintaxe de código de fato (bloco ```` ``` ````, `def f(`, `import x`, `SELECT … FROM … WHERE`, `Traceback`, `;` no fim da linha…) → `codigo`, sem consultar o modelo.
+2. Caso contrário, decide o modelo treinado. Se a confiança dele ficar abaixo de `CLASSIFICADOR_LIMIAR` (0,55), valem as regras.
+3. Um prompt com mais de 240 tokens nunca vai para o modelo `simples` (limite de contexto do AILO).
+4. Se o modelo disser `simples` mas houver sinal explícito de raciocínio ("prove", "passo a passo", "por que", "compare"…), vale `complexo`. O modelo treinado tende a achar que todo pedido curto é simples, e mandar para o modelo menor é o erro caro: compromete a resposta. Mandar para o maior só custa latência.
+
+Se o modelo treinado não existir ou o `scikit-learn` não estiver instalado, `ml` e `hibrido` usam as regras e dizem isso no `motivo`. O `GET /health` mostra a estratégia, o tokenizador e o modelo carregado (campo `classifier`).
+
+O parâmetro opcional `modelos` de `classificar()` permite substituir os destinos do `.env` pelos modelos registrados no catálogo. É assim que o load balancer usa o `ai_model`.
+
+---
+
+## 🗂️ Conjunto de prompts e avaliação do classificador
+
+Os 40 prompts manuais (`prompts.json`) são fáceis para as regras e não medem acurácia de verdade. O conjunto gerado cobre:
+
+| Eixo | Valores |
+|---|---|
+| Classe | `simples`, `codigo`, `complexo` |
+| Subtipo | simples: factual, tradução, conversão, aritmética, sentimento, gramática, definição, reescrita, conversa. Código: escrever função, debug (com código e erro no prompt), refatorar, explicar código, SQL/regex, testes, ferramentas. Complexo: prova, lógica, multietapas, comparação, argumentação, explicação profunda, planejamento, resumo de texto longo |
+| Linguagem | Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Rust, SQL, Bash, PHP |
+| Idioma | pt, en, es |
+| Casos difíceis | pergunta factual com termo técnico ("quem criou o Python?"), pedido de código sem palavra-chave ("como ordeno uma lista pela idade?"), pergunta curta mas difícil |
+
+### Fluxo
+
+```bash
+# 1. Gerar (retomável; ~2 h em CPU com gemma4:e4b). Use um modelo maior se tiver GPU.
+python -m src generate-prompts --modelo gemma4:e4b-it-qat --amostra-revisao 30
+
+# 2. Revisar a amostra impressa; ids com rótulo errado vão para experiments/dados/descartados.json
+python -m src generate-prompts --so-finalizar
+
+# 3. Treinar (TF-IDF; para embeddings: ollama pull paraphrase-multilingual e --features embed)
+python -m src train-classifier
+
+# 4. Comparar estratégias (opcional: um LLM como classificador)
+python -m src eval-classifier
+python -m src eval-classifier --llm qwen2.5:0.5b --llm-max 150
+```
+
+A finalização remove duplicatas e quase-duplicatas (cosseno de TF-IDF ≥ 0,9) e cópias dos prompts manuais. Depois separa treino e teste (70/30, estratificado por classe × subtipo × idioma) e monta o `prompts_experimento.json`: os 40 manuais mais 40 prompts de teste por classe, alternando subtipo e idioma.
+
+A avaliação gera `relatorio_classificador.md`, com acurácia, F1-macro, matriz de confusão, acerto por idioma, subtipo e linguagem, e tempo de classificação. Ela separa os erros em dois tipos: **subdimensionados** (o prompt foi para um modelo menor que o necessário, o que arrisca a qualidade) e **superdimensionados** (foi para um maior, o que só custa latência).
+
+> O rótulo de cada prompt gerado é a classe pedida ao gerador. Treino e teste vêm do mesmo gerador, então a acurácia no teste tende a ser otimista; os 40 manuais são a medida fora da distribuição.
 
 ---
 
@@ -462,6 +537,24 @@ python analisar.py
 | `--anexar` | false | Permite acrescentar a um CSV existente |
 | `--prompts` | `prompts.json` | Caminho do conjunto de prompts |
 | `--saida` | `resultados.csv` | Caminho do CSV de saída |
+| `--concorrencia` | 1 | Requisições simultâneas; `> 1` liga o modo carga |
+
+Para o conjunto maior (40 manuais + 120 gerados):
+
+```bash
+python -m src experiment --prompts experiments/prompts_experimento.json --repeticoes 2
+```
+
+### Modo carga (`--concorrencia N`)
+
+Com `N > 1`, cada rodada roda dois blocos, um por cenário (com a ordem alternada entre rodadas). Cada bloco envia os mesmos prompts na mesma ordem, com `N` requisições simultâneas. Os cenários não se misturam no mesmo bloco, para que um não dispute CPU/GPU com o outro. O `analyze` mostra a vazão (req/s) de cada bloco e o ganho da proposta. A proposta distribui a carga entre três modelos, então o ganho depende de o Ollama manter todos carregados e atender em paralelo:
+
+```bash
+# no terminal do Ollama (antes de `ollama serve`)
+OLLAMA_NUM_PARALLEL=4 OLLAMA_MAX_LOADED_MODELS=3 ollama serve
+
+python -m src experiment --prompts experiments/prompts_experimento.json --concorrencia 4
+```
 
 ### Delineamento
 
@@ -491,6 +584,8 @@ Para evitar viés de ordem, o script:
 | `resposta_chars` | Tamanho da resposta em caracteres |
 | `sucesso` | `true` / `false` |
 | `erro` | Mensagem de erro, se houver |
+| `concorrencia` | Requisições simultâneas na rodada |
+| `idioma` / `subtipo` / `linguagem` | Metadados do prompt (vazios nos manuais antigos) |
 
 ---
 

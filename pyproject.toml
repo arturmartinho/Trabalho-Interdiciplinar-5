@@ -22,6 +22,12 @@ ai-lb = "src.cli:main"
 dev = [
     "pytest>=8.0"
 ]
+ml = [
+    "scikit-learn>=1.4",
+    "joblib>=1.3",
+    "numpy>=1.26",
+    "tokenizers>=0.15",
+]
 experiments = [
     "matplotlib>=3.8",
     "numpy>=1.26",

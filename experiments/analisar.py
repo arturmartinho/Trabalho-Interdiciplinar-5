@@ -224,12 +224,43 @@ def main():
         L.append(f"| {NOME_CLASSE[k]} | {np.mean(b):.2f} | {np.mean(p):.2f} | {len(b)} | {len(p)} | "
                  f"{np.mean(cb) if cb else 0:.0f} | {np.mean(cp) if cp else 0:.0f} |")
     L.append("\n## 5. Roteamento da proposta\n")
-    L.append(f"- Classe atribuída = classe esperada: **{certos} de {len(prop)} ({certos / len(prop):.1%})**. "
-             "Atenção: o conjunto de prompts é fácil para um classificador por regras; isso não mede acurácia geral.")
+    aviso_facil = (" Atenção: o conjunto de 40 prompts manuais é fácil para um classificador por regras; "
+                   "isso não mede acurácia geral (veja relatorio_classificador.md)."
+                   if arg.get("n_prompts") == 40 else "")
+    L.append(f"- Classe atribuída = classe esperada: **{certos} de {len(prop)} ({certos / len(prop):.1%})**.{aviso_facil}")
     L.append(f"- Desvios para o fallback: **{desvios} de {len(prop)}**")
     L.append("- Atendido por: " + ", ".join(f"`{k}`: {v}" for k, v in sorted(atendido.items())))
     if erradas:
         L.append("- Prompts classificados diferente do esperado: " + "; ".join(f"{i} ({e}→{o})" for i, e, o in erradas))
+    # ---------- por idioma / subtipo (conjuntos gerados) ----------
+    for campo, titulo in (("idioma", "idioma"), ("subtipo", "subtipo")):
+        if not any(r.get(campo) for r in linhas):
+            continue
+        L.append(f"\n### Por {titulo}\n")
+        L.append(f"| {titulo} | n proposta | Classe correta | Latência baseline (s) | Latência proposta (s) |\n|---|---:|---:|---:|---:|")
+        for v in sorted({r.get(campo) or "-" for r in linhas}):
+            pr = [r for r in prop if (r.get(campo) or "-") == v]
+            lb = [float(r["latencia_s"]) for r in linhas if r["cenario"] == "baseline" and r["sucesso"] == "True"
+                  and (r.get(campo) or "-") == v]
+            lp = [float(r["latencia_s"]) for r in pr]
+            acc = sum(1 for r in pr if r["classe"] == r["classe_esperada"]) / len(pr) if pr else 0
+            L.append(f"| {v} | {len(pr)} | {acc:.1%} | {np.mean(lb) if lb else 0:.2f} | {np.mean(lp) if lp else 0:.2f} |")
+
+    # ---------- vazão (modo carga) ----------
+    carga = meta.get("carga") or []
+    if carga:
+        L.append("\n## 5b. Vazão sob carga\n")
+        L.append(f"Cada bloco roda todos os prompts de um cenário com {carga[0]['concorrencia']} requisições simultâneas.\n")
+        L.append("| Rodada | Passo | Cenário | Requisições | Duração (s) | Vazão (req/s) |\n|---:|---:|---|---:|---:|---:|")
+        for b in carga:
+            L.append(f"| {b['rodada']} | {b['passo']} | {b['cenario']} | {b['n']} | {b['duracao_s']:.1f} | {b['vazao_rps']:.3f} |")
+        vz = {c: [b["vazao_rps"] for b in carga if b["cenario"] == c and b["vazao_rps"]] for c in CENARIOS}
+        if vz["baseline"] and vz["proposta"]:
+            ganho = np.mean(vz["proposta"]) / np.mean(vz["baseline"]) - 1
+            L.append(f"\n- Vazão média: baseline {np.mean(vz['baseline']):.3f} req/s | proposta "
+                     f"{np.mean(vz['proposta']):.3f} req/s (**{ganho:+.1%}**)")
+            print(f"Vazão média (req/s): baseline {np.mean(vz['baseline']):.3f} | proposta {np.mean(vz['proposta']):.3f} ({ganho:+.1%})")
+
     L.append("\n## 6. Avisos automáticos\n")
     L.extend([f"- {w}" for w in avisos] or ["- Nenhum aviso."])
     L.append("\n## 7. Tabela em LaTeX (números com vírgula)\n")

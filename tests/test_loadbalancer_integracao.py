@@ -124,6 +124,11 @@ def _esperar(url: str, timeout_s: float = 20) -> httpx.Response:
 def _subir_api(ollama_falso, porta: int, extra_env: dict | None = None):
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    # O log é lido em UTF-8; no Windows o padrão do processo filho seria cp1252.
+    env["PYTHONIOENCODING"] = "utf-8"
+    # Regras + estimativa: o roteamento esperado não depende do .env nem de rede.
+    env["CLASSIFICADOR"] = "regras"
+    env["TOKENIZADOR"] = "estimativa"
     # Isola o catálogo do banco local usado pelo desenvolvedor.
     env["DB_FILE"] = str(Path(os.environ.get("TEMP", ".")) / f"lb-test-{porta}.db")
     env["OLLAMA_HOST"] = f"http://127.0.0.1:{ollama_falso.server_address[1]}"

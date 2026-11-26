@@ -44,6 +44,12 @@ def create_app(client: OllamaClient | None = None, classifier=None) -> FastAPI:
     async def lifespan(app: FastAPI):
         if app.state.client is None:
             app.state.client = OllamaClient(OLLAMA_HOST, OLLAMA_TIMEOUT_S)
+        if app.state.classifier is None:
+            # Resolve na subida (tokenizador + modelo treinado), não na 1a requisição.
+            try:
+                app.state.classifier = resolve_classifier()
+            except ClassifierError as exc:
+                error(str(exc))
         try:
             yield
         finally:
@@ -73,6 +79,7 @@ def create_app(client: OllamaClient | None = None, classifier=None) -> FastAPI:
             "models": models,
             "registered_models": registry.registered_models(),
             "missing_models": missing,
+            "classifier": _classifier_info(),
             "error": problem or (f"modelos ausentes no Ollama: {missing}" if missing else None),
         }
         return JSONResponse(status_code=200 if body["ok"] else 503, content=body)
@@ -120,6 +127,15 @@ async def _run(app: FastAPI, prompt: str, prompt_id: str | None) -> JSONResponse
 
     status = 200 if result.ok else 502
     return JSONResponse(status_code=status, content=result.as_dict())
+
+
+def _classifier_info() -> dict:
+    try:
+        from src.classificador import preparar
+
+        return preparar(aquecer=False)
+    except Exception as exc:  # o health nunca deve cair por causa disso
+        return {"erro": str(exc)}
 
 
 def _classifier_of(app: FastAPI):

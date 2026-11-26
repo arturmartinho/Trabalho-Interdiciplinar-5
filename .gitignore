@@ -24,6 +24,10 @@ relatorio_resultados.md
 experiments/graficos/
 experiments/anteriores/
 experiments/log_rodada.txt
+experiments/avaliacao_classificador.json
+experiments/dados/cache_*.npz
+experiments/dados/log_*.txt
+experiments/dados/*.backup.jsonl
 
 # Logs
 *.log
