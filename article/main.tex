@@ -7,12 +7,16 @@
 \usepackage{sbc-template}
 \usepackage{amsmath}
 \usepackage{comment}
+\usepackage{float}
 
 \urlstyle{same}
 
 \sloppy
 
-\title{Load Balancer para Modelos de IA}
+% Largura uniforme para as figuras, evitando floats que dominam a página.
+\newcommand{\figwidth}{0.75\linewidth}
+
+\title{Roteamento Adaptativo de Requisições entre Modelos de Linguagem de Diferentes Portes}
 
 \author{Artur Fernandes Braga de Menezes\inst{1}, Artur Rizzi Martinho\inst{1},\\ Felipe Lacerda Tertuliano\inst{1}, Gabriel Alves da Silva Diógenes\inst{1},\\ Rafael Mortimer Colares\inst{1}}
 
@@ -23,263 +27,305 @@
 \maketitle
 
 \begin{abstract}
-
-The evolution of Artificial Intelligence (AI) models, especially Large Language Models (LLMs), has significantly expanded the capacity of computational systems to perform tasks such as text generation and comprehension, programming, and information processing. However, the increased capability of these models is also associated with greater demand for computational resources during their use. Moreover, different applications may present distinct requirements for processing, latency, and resource usage, making efficient request management a relevant challenge for systems that provide AI models at scale. Studies on LLM serving systems highlight precisely the heterogeneity of requests and the need for efficient mechanisms to distribute and schedule their execution. In this context, this work proposes the study and development of a Load Balancer for AI models, capable of distributing requests among different models according to their characteristics and resource availability. The proposed approach investigates the impacts of this strategy on computational resource usage, response time, and processing cost.
-
+The use of Large Language Models (LLMs) in interactive services makes inference latency and resource consumption critical, especially when every request is sent to a single large model. This work proposes a load balancer that classifies prompts as simple, code or complex and routes them to models of different sizes (AILO-152M-v2, Qwen2.5-Coder-0.5B and Phi-3.5-mini) served locally by Ollama. Classification combines token-based rules with logistic regression over TF-IDF features in a conservative hybrid strategy. An experiment with 120 requests per scenario compared a single-model baseline with the router using latency, tokens, RAM, GPU usage and classification error. Mean latency fell by 22.18\% and 13.65\% for simple and code prompts, but complex prompts became 11.97\% slower; aggregate mean latency was nearly unchanged (7.27~s versus 7.26~s) and P95 increased by 8.55\%. Resource use, however, decreased: GPU memory by 35.06\%, GPU utilization by 34.06\%, power by 25.44\% and process RSS by 33.62\%. Reductions ranged from 37.98\% to 61.11\% in the light classes, while the complex class increased by 3.23\%--4.70\%. The error rate was 0.8\%. We conclude that complexity-based routing benefits light workloads and saves resources even when latency is flat, but should be combined with response-length and backend-state information.
 \end{abstract}
 
 \begin{resumo}
-
-A evolução dos modelos de Inteligência Artificial (IA), especialmente dos Grandes Modelos de Linguagem (Large Language Models --- LLMs), tem ampliado significativamente a capacidade dos sistemas computacionais de realizar tarefas como geração e compreensão de texto, programação e processamento de informações. Entretanto, o aumento da capacidade desses modelos também está associado a uma maior demanda por recursos computacionais durante sua utilização. Além disso, diferentes aplicações podem apresentar requisitos distintos de processamento, latência e utilização de recursos, tornando o gerenciamento eficiente das requisições um desafio relevante para sistemas que disponibilizam modelos de IA em larga escala. Estudos sobre sistemas de serving de LLMs destacam justamente a heterogeneidade das requisições e a necessidade de mecanismos eficientes para distribuir e agendar sua execução. Nesse contexto, este trabalho propõe o estudo e desenvolvimento de um Load Balancer voltado para modelos de IA, capaz de distribuir as requisições entre diferentes modelos de acordo com suas características e com a disponibilidade dos recursos. A abordagem proposta investiga os possíveis impactos dessa estratégia sobre a utilização dos recursos computacionais, o tempo de resposta e o custo de processamento.
-
+O uso de Grandes Modelos de Linguagem em serviços interativos torna latência e consumo de recursos fatores críticos, principalmente quando todas as requisições são enviadas a um único modelo grande. Este trabalho propõe um balanceador que classifica prompts como simples, código ou complexo e os distribui entre modelos de portes distintos (AILO-152M-v2, Qwen2.5-Coder-0.5B e Phi-3.5-mini), servidos localmente pelo Ollama. A classificação combina regras sobre tokens com regressão logística sobre TF-IDF em uma estratégia híbrida conservadora. Um experimento com 120 requisições por cenário comparou a linha de base de modelo único com a proposta quanto a latência, tokens, RAM, GPU e erro. A latência média caiu 22,18\% e 13,65\% nas classes simples e de código, mas a classe complexa ficou 11,97\% mais lenta; a média agregada permaneceu quase inalterada (7,27~s contra 7,26~s) e o P95 piorou 8,55\%. Em contrapartida, a memória de GPU caiu 35,06\%, a utilização 34,06\%, a potência 25,44\% e o RSS 33,62\%, com reduções de 37,98\% a 61,11\% nas classes leves e aumento de 3,23\% a 4,70\% na complexa. O erro foi de 0,8\%. Conclui-se que o roteamento beneficia cargas leves e economiza recursos mesmo com latência estável, devendo ser complementado por comprimento da resposta e estado dos backends.
 \end{resumo}
 
 \section{Introdução}
 
-A evolução dos modelos de Inteligência Artificial (IA), especialmente dos Grandes Modelos de Linguagem (Large Language Models --- LLMs), tem ampliado significativamente a capacidade dos sistemas computacionais de realizar tarefas como geração e compreensão de texto, programação e processamento de informações. Entretanto, o aumento da capacidade desses modelos também está associado a uma maior demanda por recursos computacionais durante sua utilização. Além disso, diferentes aplicações podem apresentar requisitos distintos de processamento, latência e utilização de recursos, tornando o gerenciamento eficiente das requisições um desafio relevante para sistemas que disponibilizam modelos de IA em larga escala. Estudos sobre sistemas de serving de LLMs destacam justamente a heterogeneidade das requisições e a necessidade de mecanismos eficientes para distribuir e agendar sua execução \cite{article:llm_gpu,article:llumnix}.
+A adoção de Grandes Modelos de Linguagem (LLMs) ampliou a capacidade de sistemas de geração, programação e análise de texto, mas elevou a demanda computacional durante a inferência \cite{article:llm_gpu,article:llumnix}. Em produção, as requisições são heterogêneas: uma pergunta curta, um pedido de código e uma demonstração longa impõem cargas muito distintas. Tratá-las de forma idêntica desperdiça capacidade em tarefas triviais e concentra a demanda no maior modelo. Há também o erro caro de subdimensionar: enviar uma demonstração longa a um modelo pequeno pode degradar a resposta, enquanto usar sempre o maior modelo penaliza todas as demais requisições.
 
-Nesse contexto, utilizar um único modelo de grande porte para atender diferentes tipos de requisições pode resultar em uma utilização pouco eficiente dos recursos disponíveis, principalmente quando determinadas tarefas poderiam ser executadas por modelos menores ou especializados. O problema também se estende à distribuição das requisições entre diferentes instâncias, uma vez que variações na demanda podem provocar sobrecarga em determinados recursos enquanto outros permanecem subutilizados. Trabalhos recentes demonstram que estratégias de balanceamento e escalonamento podem melhorar a utilização da infraestrutura disponível. O SkyWalker, por exemplo, propõe um mecanismo de balanceamento de carga entre diferentes regiões para inferência de LLMs, buscando utilizar os recursos de forma mais eficiente e reduzir custos de serving \cite{article:skywalker}. De forma semelhante, o Llumnix explora o reagendamento dinâmico de requisições entre múltiplas instâncias de modelos para lidar com diferentes requisitos de recursos e latência \cite{article:llumnix}.
+O problema investigado é como distribuir requisições entre modelos de portes diferentes para reduzir latência e uso de recursos sem comprometer a qualidade. A literatura mostra que o despacho define latência, vazão, custo e ocupação de GPU \cite{article:llm_gpu,article:performance_lb}, mas a maioria dos trabalhos escolhe apenas \emph{qual instância} atende, assumindo réplicas equivalentes \cite{article:skywalker,article:dualmap}. Quando há modelos de portes distintos, a decisão passa a ser \emph{qual modelo} responde, e depende da complexidade da consulta. Assim, o roteamento local por classe combina duas decisões normalmente tratadas à parte: a classificação da intenção e o despacho ao backend. RouteLLM e FrugalGPT já exploram a escolha do modelo, porém em APIs pagas e com foco em custo e qualidade \cite{article:routellm,article:frugalgpt}.
 
-Diante desse cenário, este trabalho propõe o estudo e desenvolvimento de um Load Balancer voltado para modelos de IA, capaz de distribuir as requisições entre diferentes modelos de acordo com suas características e com a disponibilidade dos recursos. A utilização de múltiplos modelos pode permitir que diferentes tipos de solicitações sejam direcionados para alternativas mais adequadas, evitando o uso desnecessário de modelos de maior porte quando modelos mais simples forem suficientes para determinada tarefa. Dessa forma, busca-se investigar os possíveis impactos dessa abordagem sobre aspectos como utilização dos recursos computacionais, tempo de resposta e custo de processamento. A literatura demonstra que mecanismos de balanceamento e escalonamento aplicados ao serving de LLMs podem proporcionar ganhos de desempenho e redução de custos, reforçando a relevância de investigar estratégias semelhantes em arquiteturas compostas por múltiplos modelos \cite{article:llm_gpu,article:skywalker,article:llumnix}. O protótipo construído materializa essa proposta em uma CLI única, que cadastra modelos locais e remotos, classifica os prompts e despacha as requisições pelo load balancer.
+Os objetivos são: (i)~implementar um serviço de roteamento com catálogo, classificador, despacho e recuperação; (ii)~construir e avaliar um classificador de complexidade; (iii)~comparar modelo único e proposta; e (iv)~analisar latência, tokens, RAM, GPU e erro por classe. O protótipo usa Python, FastAPI e Ollama; o classificador combina contagem de tokens, TF-IDF e regras de segurança, avaliado em 713 prompts gerados e 76 testes automatizados, com limiares de 50 e 240 tokens. A campanha adotou o modo híbrido com TF-IDF e comparou 120 requisições por cenário, 40 por classe.
 
-\section{Revisão bibliográfica}
+As classes simples e de código reduziram a latência média em 22,18\% e 13,65\% e os tokens em 13,10\% e 12,39\%; a classe complexa piorou 11,97\%. Assim, a média agregada variou 0,14\% e o P95 piorou 8,55\%. Mesmo assim, memória de GPU, utilização, potência e RSS caíram 35,06\%, 34,06\%, 25,44\% e 33,62\%. Esse resultado negativo parcial mostra que a latência agregada não captura o benefício de recursos, e que a composição da carga define a utilidade da estratégia. A piora da cauda é relevante porque os pedidos complexos concentram os maiores tempos e deslocam o P95 global, mesmo sendo apenas um terço das requisições.
 
-Sistemas de inferência de LLMs não tratam todas as requisições da mesma forma. Há prompts curtos e longos, respostas de poucos tokens e de milhares, picos de demanda e períodos ociosos. Por isso, o load balancer deixou de ser um detalhe de infraestrutura e passou a definir latência, custo e uso de GPU. Os cinco trabalhos a seguir discutem justamente esse componente: a quem enviar cada requisição. Nenhum deles, porém, escolhe entre modelos de portes diferentes, que é o recorte deste projeto.
+A Seção~2 posiciona o trabalho; a Seção~3 detalha arquitetura, classificador e experimento; a Seção~4 apresenta e interpreta os resultados; a Seção~5 sintetiza contribuições e limitações.
 
-Kossmann et al. descrevem a arquitetura mais comum desses sistemas em dois níveis \cite{article:llm_gpu}. Na entrada, o load balancer escolhe o servidor que guarda uma réplica do modelo. Dentro do servidor, um scheduler decide se a requisição espera na fila, entra no lote de execução ou é interrompida. Na prática, muitos serviços ainda usam round-robin, escolha aleatória ou \emph{power of two choices}. Os autores propõem o SAL (\emph{Server-Aware Load Balancer}), que estima a carga de cada máquina a partir dos tokens ainda na fila e da memória livre, e envia o pedido para a menos carregada. O SAL é simples de colocar no lugar da política atual e reduz o tempo de geração em relação a balanceadores genéricos. O artigo liga redes, ou seja, qual servidor recebe o pedido, a sistemas operacionais, isto é, como a fila e a preempção funcionam na GPU.
+\section{Revisão de Literatura e Trabalhos Correlatos}
 
-Jain et al. mostram que balancear entre várias instâncias do mesmo modelo pesa mais na latência do que só ajustar o scheduler de uma GPU \cite{article:performance_lb}. Round-robin e políticas parecidas tratam a inferência como um job único e ignoram as duas fases do processamento: o \emph{prefill}, mais pesado em computação, e o \emph{decode}, mais pesado em memória. Misturar esses perfis na mesma instância atrasa todo mundo. O load balancer deles prevê o tamanho da resposta e o efeito de misturar cargas. Em quatro instâncias, a latência média cai 11,43\% em 2.000 requisições. A limitação é clara e importa para este trabalho: todas as instâncias servem o mesmo modelo. Não há escolha entre um modelo pequeno e um grande.
+\subsection{Fundamentação: serving, custo e roteamento}
 
-O Llumnix parte de outra observação: o tempo de serviço e o uso de memória de uma requisição de LLM não se conhecem de antemão \cite{article:llumnix}. O KV cache cresce a cada token, as prioridades mudam e um único despacho no início não dá conta. O sistema reagenda pedidos em execução, migrando a requisição e o estado na GPU de uma instância para outra, como a troca de contexto entre núcleos no sistema operacional. Isso reduz interferência, fragmentação de memória e violação de SLO. Num cluster de 16 GPUs, a latência P99 do primeiro token cai até $15\times$ frente a um scheduler clássico. O ganho de custo chega a 36\% para a mesma latência de cauda. Aqui o load balancing aparece como problema de sistemas operacionais: fila, isolamento, preempção e migração de estado.
+A inferência de um LLM tem duas fases: no \emph{prefill} o prompt é processado e o cache de atenção é inicializado; no \emph{decode}, tokens são gerados um a um. O tempo depende do tamanho de entrada e saída, da ocupação da GPU e das filas do servidor \cite{article:performance_lb,article:llumnix}. Logo, média, mediana, P95, tempo até o primeiro token e vazão são complementares: um balanceador pode melhorar a média e piorar a cauda. Em servidores com múltiplas réplicas, escolher o destino sem observar filas e caches pode anular ganhos locais.
 
-O SkyWalker leva o mesmo problema para a rede geográfica \cite{article:skywalker}. Provedores reservam GPU em cada região para o pico local e desperdiçam capacidade fora do horário de pico. Um balanceador único no centro do mapa barateia o serviço, mas vira gargalo e ponto único de falha. A proposta coloca um load balancer por região e só desvia tráfego quando uma região satura. Round-robin e \emph{least-load} falham porque o tempo de uma inferência varia de segundos a dezenas de segundos, e porque pedidos com o mesmo prefixo deveriam cair na GPU que já tem o KV cache. Em cargas reais, o SkyWalker aumenta a vazão em $1,12$ a $2,06\times$ e reduz a latência em $1,74$ a $6,30\times$ diante de load balancers existentes, com cerca de 25\% menos custo. Para este projeto, o recorte multi-região fica fora do protótipo. O que permanece é a lição de rede: o despacho precisa olhar latência, vazão e estado dos backends, não só um rodízio cego.
+Modelos menores custam menos, mas têm contexto e raciocínio limitados; modelos maiores são robustos e caros. Essa tensão motivou roteadores dinâmicos. FrugalGPT combina modelos pagos e reduz custos até 98\% mantendo a qualidade \cite{article:frugalgpt}; RouteLLM usa preferências para alternar entre modelo forte e fraco \cite{article:routellm}. Essa distinção é importante porque modelos locais não têm preço por token, mas competem por VRAM e energia limitadas. Este trabalho difere ao usar modelos locais heterogêneos, classe explícita de complexidade e métricas de sistema.
 
-O DualMap trata o conflito entre duas políticas que os artigos anteriores encostam, mas não unem de fato \cite{article:dualmap}. Mandar pedidos com o mesmo prefixo para a mesma máquina melhora o cache e o tempo até o primeiro token, mas cria pontos quentes. Espalhar pela menor carga equilibra o cluster e quebra o cache. A solução mapeia cada requisição a duas instâncias candidatas, a ideia clássica de \emph{power of two choices}, e escolhe a melhor no momento. Se o SLO de TTFT ameaça estourar, o sistema deixa o cache em segundo plano e passa a olhar carga. Se uma máquina esquenta, migra pedidos para a instância reserva. Sobre o vLLM, a capacidade efetiva de requisições sobe até $2,25\times$ com o mesmo SLO. O artigo une redes, no despacho e na elasticidade, e arquitetura, no KV cache e na ocupação de GPU.
+\subsection{Trabalhos correlatos}
 
-Os cinco trabalhos concordam em três pontos. Load balancing de LLM não se comporta como o de um site comum: o serviço é longo, tem duas fases e o tamanho da resposta não é conhecido. O balanceador e o scheduler interno são camadas diferentes; otimizar só uma não basta \cite{article:llm_gpu,article:performance_lb}. Memória, KV cache, fragmentação e localidade de prefixo entram na decisão \cite{article:llumnix,article:skywalker,article:dualmap}.
+Kossmann et al. descrevem o \emph{serving} em dois níveis: balanceador de entrada e escalonador interno \cite{article:llm_gpu}. O SAL estima carga por tokens na fila e memória livre, distribuindo pedidos conforme o estado real do servidor. Jain et al. balanceiam réplicas do mesmo modelo considerando duração prevista e mistura de \emph{prefill}/\emph{decode}, com ganho de 11,43\% na média em quatro instâncias \cite{article:performance_lb}; mostram que a fase de geração influencia tanto quanto o tamanho do prompt. Llumnix reagenda requisições em execução e migra estado de GPU, reduzindo interferência e fragmentação de memória, com P99 do primeiro token até $15\times$ menor \cite{article:llumnix}. SkyWalker distribui tráfego entre regiões com balanceadores locais e afinidade de cache, aumentando vazão de $1{,}12\times$ a $2{,}06\times$ \cite{article:skywalker}. DualMap usa duas candidatas por requisição e migração; se o SLO de primeiro token está ameaçado, a carga prevalece sobre o cache, elevando capacidade até $2{,}25\times$ \cite{article:dualmap}.
 
-A lacuna que este trabalho explora está no que todos eles deixam de fora. Os cinco balanceiam réplicas do mesmo modelo, ou do mesmo serviço, e perguntam apenas \emph{qual instância} deve atender o pedido. Nenhum classifica a complexidade da consulta para escolher entre um modelo leve e um modelo maior, nem junta essa escolha com o estado das filas. O load balancer proposto aqui continua sendo um despachante de camada de aplicação, mas o conjunto de destinos passa a depender do tipo de prompt, e a instância escolhida, da carga observada.
-
-\section{Metodologia de Desenvolvimento e Avaliação}
-
-A metodologia adotada neste trabalho organiza-se em torno de ciclos semanais de desenvolvimento e avaliação, conforme apresentado na Tabela \ref{tab:cronograma}. Se espera ter até a sexta semana um código completo capaz de atender nossos requisitos e ser utilizado para as medições, a partir disso o foco do trabalho se vira para coleta de resultados, melhorias, redação do artigo e apresentações.
+A Tabela~\ref{tab:relacionados} resume o posicionamento. Os cinco primeiros trabalhos decidem qual instância atende; RouteLLM e FrugalGPT escolhem o modelo em APIs. Este trabalho combina classificação explícita, modelos locais de portes distintos e avaliação de latência, tokens e recursos. Diferentemente de Llumnix e DualMap, não há migração de estado nem observação de fila na decisão, o que limita a comparação direta com tais trabalhos.
 
 \begin{table}[htb]
 \centering
-\caption{Cronograma de atividades do projeto.}
-\label{tab:cronograma}
-\begin{tabular}{p{2.2cm}p{11cm}}
+\small
+\caption{Posicionamento em relação aos trabalhos correlatos.}
+\label{tab:relacionados}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{p{2.0cm}p{3.4cm}p{3.4cm}p{4.7cm}}
+\hline\hline
+\textbf{Trabalho} & \textbf{O que decide} & \textbf{Critério} & \textbf{Diferença aqui} \\
 \hline
-\hline
-\textbf{Semana} & \textbf{Atividades principais} \\
-\hline
-\hline
-1 & Configuração do ambiente (Ollama, modelos leves), levantamento bibliográfico inicial. \\
-\hline
-2 & Desenvolvimento do classificador de prompts, implementação da versão inicial do LoadBalancer. \\
-\hline
-3 (Sprint 2) & Detalhamento da implementação, coleta de resultados preliminares, preparação e apresentação oral do Sprint 2. \\
-\hline
-4 & Refinamento do classificador, implementação de métricas de monitoramento, escrita da metodologia. \\
-\hline
-5 & Expansão do conjunto de testes, execução de experimentos comparativos, análise estatística dos resultados. \\
-\hline
-6 & Otimização do LoadBalancer, testes automatizados de roteamento, escrita da seção de resultados. \\
-\hline
-7 & Comparação com trabalhos relacionados, redação da seção comparativa, preparação de material visual para o pitch. \\
-\hline
-8 & Redação das conclusões, revisão e refinamento do artigo, roteiro do pitch comercial. \\
-\hline
-9 (Sprint 3) & Gravação e edição do pitch comercial, preparação e apresentação oral final. \\
-\hline
-10 & Submissão final do artigo, documentação do projeto e entrega dos materiais de apresentação. \\
-\hline
+SAL & Instância & Fila e memória & Não escolhe entre modelos \\
+Jain et al. & Instância & Duração prevista & Réplicas do mesmo modelo \\
+Llumnix & Reagendamento & GPU e SLO & Aqui a decisão é pré-inferência \\
+SkyWalker & Região & Carga e cache & Multi-região \\
+DualMap & Instância & Cache e carga & Sem classificação de complexidade \\
+RouteLLM & Modelo & Preferência/custo & Modelos locais e métricas \\
+FrugalGPT & Cascata & Custo e acurácia & Classe explícita e despacho \\
+\hline\hline
 \end{tabular}
+\setlength{\tabcolsep}{6pt}
 \end{table}
 
-Quanto ao método de avaliação e validação foi escolhida a medição em ambiente controlado complementada pela analise dos resultados, isso porque o desempenho de um LoadBalancer para modelos de IA depende de fatores dinâmicos do ambiente que não podem ser capturados por simulações. A validação será conduzida por meio de experimentos comparativos entre dois cenários: (i) \textit{baseline}, no qual todas as requisições são direcionadas ao modelo de maior porte; e (ii) \textit{proposta}, na qual o LoadBalancer classifica o prompt e o encaminha ao modelo mais adequado. Serão coletadas métricas de latência média, P95 e P99, além de uso de RAM e GPU por máquina, a análise estatística dos dados incluirá identificação de outliers e geração de gráficos comparativos.
+As fontes da Tabela~\ref{tab:relacionados} são \cite{article:llm_gpu,article:performance_lb,article:llumnix,article:skywalker,article:dualmap,article:routellm,article:frugalgpt}. Dessa literatura extraem-se três lições para o protótipo. Primeiro, o destino deve considerar o estado do servidor, não apenas regras estáticas. Segundo, quando existem modelos de portes diferentes, o custo de cada escolha precisa ser medido, e não assumido. Terceiro, uma decisão pré-inferência é barata, mas não tem a flexibilidade de reagendar requisições já em execução; por isso, este trabalho mede latência e recursos separadamente e discute o que falta para aproximar as duas abordagens.
 
-O ambiente experimental é composto por uma máquina executando o Ollama com modelos leves (Phi-3.5-mini, Qwen2.5-Coder-0.5B e AILO-152M-v2). O LoadBalancer é implementado em Python com FastAPI, utiliza \texttt{httpx} para comunicação com os servidores de inferência e mantém um catálogo SQLite de modelos, com classe, status e URL por backend. Uma CLI unificada concentra o cadastro dos modelos, a classificação, a inferência, a execução do serviço e a análise dos experimentos. Ajustes podem envolver a inclusão de novas métricas, a alteração do conjunto de modelos avaliados ou a adoção complementar de técnicas de simulação, caso se mostrem necessárias para validar aspectos específicos do sistema.
+\section{Metodologia}
 
-\section{Desenvolvimento e Implementação}
+\subsection{Desenho geral}
 
-O LoadBalancer desenvolvido é um serviço HTTP em Python, construído sobre FastAPI, que fica entre o cliente e as instâncias do Ollama. Ele recebe a requisição, decide qual dos modelos cadastrados deve atendê-la e devolve a resposta junto com os metadados da decisão. A implementação foi organizada em quatro camadas --- apresentação, aplicação, domínio e dados ---, com uma única porta de entrada, a CLI unificada. O núcleo de aplicação mantém três responsabilidades que se encaixam em sequência: a classificação do prompt, que define o destino; o despacho para o Ollama, que executa a inferência e mede a latência; e a resiliência, que trata falhas sem comprometer a resposta. As subseções a seguir descrevem o classificador, o despacho e, por fim, o catálogo e a CLI que conectam essas peças.
+Adotou-se abordagem experimental quantitativa com desenvolvimento de protótipo. A pergunta é: em que medida o roteamento por complexidade reduz latência e consumo de recursos frente ao modelo maior, e quais são seus custos? As variáveis independentes são o cenário e a classe esperada; as dependentes são latência, tokens, RSS, utilização, memória e potência de GPU, além do erro de classificação. A comparação é pareada por prompt, pois cada um passa pelos dois cenários.
 
-\begin{figure}[htb]
+\subsection{Arquitetura e implementação}
+
+O balanceador é um serviço FastAPI \cite{misc:fastapi} entre o cliente e o Ollama \cite{misc:ollama}, com quatro camadas (apresentação, aplicação, domínio e dados) e entrada única pela CLI. Expõe \texttt{/health}, \texttt{/infer} e \texttt{/v1/chat/completions}; neste último o campo \texttt{model} é ignorado. O catálogo SQLite (\texttt{ai\_models}) guarda nome, tipo, status, URL e \texttt{role} (\texttt{simples}, \texttt{codigo}, \texttt{complexo}, \texttt{reserva}, \texttt{geral}). A precedência é modelo ativo da classe, variável \texttt{MODELO\_*}, e fallback por \texttt{reserva} ou \texttt{FALLBACK\_MODEL}. O despacho usa \texttt{httpx} em \texttt{POST /api/generate}; a latência é medida com \texttt{time.perf\_counter} e falhas são reenviadas ao modelo de reserva. O fallback registra o desvio e usa o tag de reserva; a suíte de 76 testes cobre também integração com Ollama real e a CLI unificada. A Figura~\ref{fig:arquitetura} ilustra as camadas do serviço e o caminho percorrido por cada requisição.
+
+\begin{figure}[H]
 \centering
-\includegraphics[width=\linewidth]{fig_arquitetura.png}
-\caption{Arquitetura em camadas do projeto. A CLI unificada é a porta de entrada; o load balancer consulta o catálogo de modelos para resolver classe e URL de cada destino e despacha para o Ollama local ou remoto.}
+\includegraphics[width=\figwidth]{fig_arquitetura.png}
+\caption{Arquitetura em camadas: a CLI decide classe, tag e URL e despacha para o Ollama.}
 \label{fig:arquitetura}
 \end{figure}
 
-\subsection{Classificador de prompts}
+\subsection{Classificador de complexidade}
 
-A primeira responsabilidade do serviço é decidir, antes de qualquer chamada ao Ollama, qual dos modelos cadastrados atende cada requisição. Essa decisão é tomada pela função pura \texttt{classificar(prompt)}, em \texttt{src/classificador.py}, que não faz entrada e saída nem depende de estado: a mesma entrada produz sempre a mesma saída. O texto é convertido para minúsculas e tem os acentos removidos; em seguida, as regras da Tabela~\ref{tab:regras-classificador} são avaliadas em ordem, e a primeira que se aplica define a classe. A tabela também registra a tag padrão de cada classe, usada quando o catálogo ainda não tem um modelo ativo para ela.
+A versão inicial usava palavras; passou-se ao tokenizador do Phi-3.5 \cite{article:phi3}, com limiares de 50 e 240 tokens. Três estratégias estão disponíveis. \texttt{regras}: vazio $\rightarrow$ simples; $>$240 tokens $\rightarrow$ complexo; sintaxe de código $\rightarrow$ código; sinais de raciocínio $\rightarrow$ complexo; até 50 tokens $\rightarrow$ simples; demais $\rightarrow$ complexo. Expressões regulares detectam blocos de código, nomes de linguagens, ``def f('' e ``SELECT ... FROM''; sem tokenizador, usa-se 0,343 token por caractere. \texttt{ml}: regressão logística balanceada \cite{article:sklearn}, com TF-IDF de n-gramas de palavras (1--2) e caracteres (2--5), ou embeddings do Ollama; $C$ é escolhido por validação cruzada estratificada com F1-macro. \texttt{hibrido}: adotada na campanha, reconhece sintaxe inequívoca de código e consulta o modelo nos demais casos; abaixo de confiança 0,55 aplica as regras. Duas travas impedem subdimensionamento: mais de 240 tokens nunca vai ao modelo simples, e sinal de raciocínio não é rebaixado.
 
-A escolha por regras, e não por aprendizado, foi deliberada nesta Sprint. Como o objetivo é atribuir diferenças de latência ao roteamento, a decisão precisa ser estável entre rodadas e explicável no log. Um classificador por aprendizado introduziria variação na própria variável que se quer medir.
+A opção híbrida com TF-IDF custa cerca de 5~ms por prompt, sem rede nem modelos extras; embeddings chegam a 98,1\% de acurácia, mas custam cerca de 440~ms. O uso de um LLM como classificador foi pior e mais lento, conforme a Seção~4.4.
 
-\begin{table}[ht]
-\centering
-\caption{Regras do classificador, em ordem de prioridade}
-\label{tab:regras-classificador}
-\begin{tabular}{clll}
-\hline
-\textbf{\#} & \textbf{Condição} & \textbf{Classe} & \textbf{Modelo} \\ \hline
-1 & Prompt com mais de 120 palavras & complexo & Phi-3.5-mini \\
-2 & Sinal de código & código & Qwen2.5-Coder-0.5B \\
-3 & Sinal de raciocínio & complexo & Phi-3.5-mini \\
-4 & Até 25 palavras, sem sinais & simples & AILO-152M-v2 \\
-5 & Demais casos (ambíguo) & complexo & Phi-3.5-mini \\ \hline
-\end{tabular}
-\end{table}
+\subsection{Conjunto de prompts rotulados}
 
-Os sinais de código são expressões regulares que identificam blocos delimitados por três crases, nomes de linguagens (Python, Java, SQL etc.), termos como ``função'', ``implemente'', ``bug'' e ``compilar'', e trechos de sintaxe como \texttt{def nome(} ou \texttt{import}. Os sinais de raciocínio identificam pedidos como ``explique'', ``por que'', ``compare'', ``analise'', ``passo a passo'' e ``resolva''. O limite de 120 palavras vem primeiro porque um pedido longo exige contexto que os modelos de 0,5B e 152M parâmetros tendem a não sustentar, qualquer que seja o tema.
+Geraram-se prompts com gemma4:e4b-it-qat (temperatura 0,9, semente 42, saída em JSON), cruzando três classes, 27 subtipos, três idiomas e doze linguagens. Casos adversariais incluem ``Quem criou o Python?'' (simples) e pedidos de código sem palavras-chave. Dos 723 brutos, após filtragem, duplicatas por similaridade TF-IDF $\geq 0{,}9$ e revisão manual, restaram 713: 300 simples, 230 código e 183 complexos, divididos em 505 treino e 208 teste. Os 40 prompts manuais servem como verificação externa; 40 por classe foram usados no experimento. A matriz variou subtipos, idiomas e linguagens para incluir casos que invertem a pista óbvia da classe.
 
-Há dois casos ambíguos tratados de forma explícita. Quando o prompt tem sinais de código e de raciocínio (por exemplo, ``explique por que este código Python é lento''), a regra de código tem prioridade, porque o modelo especializado conhece melhor o domínio, e o motivo registrado menciona os dois sinais. Quando o prompt tem tamanho médio e nenhum sinal, a escolha é o Phi-3.5-mini: errar para o modelo maior aumenta a latência, mas não compromete a resposta, ao passo que errar para o modelo menor pode comprometê-la.
+\subsection{Experimento comparativo e métricas}
 
-A função devolve a classe, o modelo escolhido, o motivo em texto e a contagem de palavras. Esses campos são a entrada da etapa seguinte: é a classe devolvida aqui que o despacho usa para resolver o destino no catálogo e, com ele, a tag e a URL do backend. A função \texttt{classificar\_e\_registrar} grava os mesmos campos no log de cada requisição, junto com o identificador do prompt. Sem esse registro, a latência medida em um cenário não teria explicação: é ele que permite separar, na análise, as requisições atendidas por cada modelo e verificar se o classificador acertou a classe esperada do conjunto de prompts. A função tem testes automatizados para os três casos principais, para o pedido longo e para os dois casos ambíguos.
+Compararam-se \texttt{default\_model} (Phi-3.5-mini para tudo) e \texttt{loadbalancer\_classifier} (\texttt{POST /infer} com roteamento), sobre os mesmos 120 prompts, totalizando 240 chamadas. A ordem dos prompts e dos blocos usou semente fixa; duas passadas de aquecimento foram descartadas. Cada cenário foi medido em bloco homogêneo. Os destinos da proposta foram AILO-152M-v2 (simples), Qwen2.5-Coder-0.5B (código) e Phi-3.5-mini (complexo); a configuração usou \texttt{CLASSIFICADOR=hibrido} com TF-IDF. O limite de geração foi mantido constante para não confundir velocidade do modelo com comprimento da resposta. A melhoria foi calculada por
 
-Como limitação, regras por palavra-chave produzem falsos positivos (``o que é uma API?'' é factual, mas contém um sinal de código) e dependem do idioma. O refinamento do classificador, com novas categorias e a avaliação de acurácia sobre o conjunto rotulado, está previsto para a semana 4 do cronograma.
+\begin{equation}
+\Delta_m(c) = \frac{L^{\text{padrão}}_m(c) - L^{\text{LB}}_m(c)}{L^{\text{padrão}}_m(c)} \times 100\%,
+\label{eq:delta}
+\end{equation}
 
-\subsection{Arquitetura e despacho}
+com $m \in \{\text{média},\text{mediana},\text{P95}\}$. A mesma fórmula vale para tokens e recursos; positivo indica economia. O erro é a média de indicadores 0/1 que comparam classe predita e esperada, sem incluir a linha de base.
 
-Definido o destino pelo classificador, a segunda responsabilidade do serviço é executar a inferência e medir quanto ela custou. A biblioteca FastAPI publica o endpoint \texttt{POST /infer}, cujo corpo traz o texto do prompt e, quando a campanha precisa repetir o mesmo item, um identificador fixo. O endpoint \texttt{POST /v1/chat/completions} aceita o formato usual de conversa, extrai a última mensagem do usuário e segue o mesmo caminho. Nos dois casos, um eventual nome de modelo enviado pelo cliente é ignorado: o destino sai do classificador e do catálogo descritos nas subseções anteriores.
+\subsection{Ambiente experimental e coleta de recursos}
 
-O caminho tem quatro etapas.
+A campanha usou Ubuntu 26.04.1 LTS (núcleo 7.0.0-27-generic, x86\_64), Intel Core i7-10700F a 2,90~GHz (8 núcleos, 16 threads, até 4,8~GHz, 16~MiB de L3), 29~GiB de RAM, 4~GiB de swap, RTX 3060 Ti (8192~MiB) e RTX 4060 (8188~MiB), driver 580.178.04 e CUDA 13.0. O software inclui Python 3.14.4, Ollama 0.35.0, FastAPI 0.162.0, \texttt{httpx} 0.28.1 e scikit-learn 1.9.1. Os três modelos foram servidos pelo mesmo processo Ollama, sem replicação em rede.
 
-\begin{enumerate}
-    \item O serviço chama \texttt{classificar\_e\_registrar}, em \texttt{src/classificador.py}. Essa função grava a decisão no log e delega à função pura \texttt{classificar}, que devolve a classe, a tag padrão e o motivo da escolha. Em seguida, o registro do catálogo é consultado: se houver um modelo ativo para a classe, sua tag e sua URL substituem o padrão. A regra desta entrega é a seguinte. Pedido curto e factual vai para o AILO-152M-v2. Pedido de código vai para o Qwen2.5-Coder-0.5B. Pedido longo ou de raciocínio vai para o Phi-3.5-mini. O despacho grava classe, modelo e motivo no log, para que a latência medida tenha explicação.
-    \item Um cliente escrito com \texttt{httpx} envia o prompt à API do Ollama, em \texttt{POST /api/generate}, com o fluxo desligado, de modo que a resposta volte inteira. A chamada usa a URL associada ao modelo: \texttt{OLLAMA\_HOST} para modelos locais ou o endereço registrado com \texttt{models connect} para remotos. Há tempo-limite configurável. O relógio é \texttt{time.perf\_counter}, iniciado imediatamente antes do envio e parado quando a resposta chega ou quando a chamada falha. Esse intervalo é a latência de ponta a ponta daquela tentativa. Se o modelo não estiver em memória, o Ollama o carrega dentro da mesma chamada, e o tempo de carga entra na medida.
-    \item Se o modelo escolhido não responde, o mesmo prompt é enviado ao modelo com role \texttt{reserva} no catálogo e, na ausência dele, ao \texttt{FALLBACK\_MODEL}. Conta como falha o estouro de tempo, a queda da conexão, um erro HTTP ou um corpo vazio. O log registra o redirecionamento com o modelo escolhido, o modelo de reserva e o motivo da falha. Quando o classificador já havia escolhido o próprio modelo de reserva, não há segunda tentativa, para não contar a mesma falha duas vezes.
-    \item A resposta reúne o texto gerado, a classe, o motivo, o modelo escolhido, o modelo que de fato atendeu, a marca de redirecionamento e duas latências. Uma é a da chamada ao Ollama que produziu a resposta. A outra é o tempo total do despacho, da chegada do prompt até a resposta pronta, já com a classificação e, se houver, o redirecionamento.
-\end{enumerate}
+Um coletor em segundo plano amostrava a cada 250~ms o RSS (\texttt{psutil}) e a GPU (\texttt{nvidia-smi}). Ao fim de cada bloco, média e pico eram anexados às requisições do cenário. Utilização é a média entre GPUs; memória e potência são somadas, conforme a Seção~3.6. A opção por duas GPUs reproduz uma estação local comum; por isso, as médias de utilização e as somas de memória/potência devem ser lidas como indicadores relativos entre cenários, não como capacidade absoluta de datacenter.
 
-O endereço padrão do Ollama, o tempo-limite e o modelo de reserva continuam em variável de ambiente, mas o catálogo tem precedência: a URL e a role registradas para um modelo vencem os valores do \texttt{.env}. O nome devolvido pelo classificador precisa ser o mesmo tag que aparece em \texttt{ollama list}. O serviço não descarrega modelos: quem decide o que permanece em RAM é o próprio Ollama. Em máquina com pouca memória, a troca de modelo pode dominar a latência. O log deixa esse efeito visível, porque cada requisição indica o modelo chamado e se houve desvio para o modelo de reserva.
+\subsection{Ameaças à validade}
 
-\subsection{Catálogo de modelos e CLI unificada}
+Os rótulos vêm do gerador, com revisão parcial; treino e teste compartilham a origem. A campanha usou uma máquina, 120 prompts e nenhum teste de hipótese. Os cenários geraram quantidades diferentes de tokens, e o RSS pode incluir efeitos de carregamento. Potência média não é energia por requisição; agregar duas GPUs dificulta comparações. Com 40 observações por classe, os percentis são descritivos e não sustentam intervalos de confiança. Além disso, a classificação foi avaliada com o mesmo gerador usado no treino, o que pode superestimar a acurácia em tráfego real.
 
-A camada de domínio do projeto é o catálogo de modelos, que transforma o conjunto de destinos em configuração e não em código. A tabela \texttt{ai\_models}, no SQLite, guarda \texttt{name}, \texttt{type}, \texttt{status}, \texttt{url} e \texttt{role}. A coluna \texttt{role} recebe \texttt{simples}, \texttt{codigo}, \texttt{complexo}, \texttt{reserva} ou \texttt{geral}; a migração de bancos existentes é automática, e aliases como \texttt{fallback} e \texttt{code} são normalizados. O load balancer consulta o catálogo por meio de \texttt{src/loadbalancer/registry.py}, que devolve, para cada classe, a tag e a URL do primeiro modelo ativo. Assim, a classe que antes estava amarrada ao código do classificador passa a ser um dado do cadastro.
+\section{Resultados e Análises}
 
-Toda a operação é acessível por uma única porta de entrada: \texttt{python -m src}, ou o atalho \texttt{ai-lb} instalado pelo \texttt{pyproject.toml}. O comando \texttt{models} agrupa \texttt{list}, \texttt{register}, \texttt{host}, \texttt{connect}, \texttt{update}, \texttt{stop}, \texttt{resume}, \texttt{call} e \texttt{remove}. O \texttt{register} cadastra um modelo local ou remoto sem contatar o backend; o \texttt{host} baixa e sobe um modelo no Ollama; o \texttt{connect} valida uma URL remota e a associa a uma role. Os comandos \texttt{classify}, \texttt{infer}, \texttt{serve}, \texttt{experiment} e \texttt{analyze} cobrem o restante do fluxo. O \texttt{serve} publica a API FastAPI em \texttt{/health}, \texttt{/infer} e \texttt{/v1/chat/completions}; o \texttt{experiment} e o \texttt{analyze} delegam aos scripts de \texttt{experiments/}, mantendo a mesma interface.
+\subsection{Latência por classe}
 
-O roteamento segue uma precedência explícita: primeiro o modelo ativo do catálogo para a classe; se não houver, a tag \texttt{MODELO\_*} do \texttt{.env}. O fallback usa a role \texttt{reserva} e, na ausência dela, \texttt{FALLBACK\_MODEL}. A URL também vem do catálogo: um modelo registrado com \texttt{-{}-url} é chamado nesse endereço, enquanto modelos locais usam \texttt{OLLAMA\_HOST}. Como o classificador resolve o catálogo na primeira requisição, cadastrar ou trocar uma role depois disso exige reiniciar o \texttt{serve}. A suíte automatizada cobre classificador, despacho, catálogo e CLI; no ambiente de desenvolvimento atual, 33 testes passam e 2 são ignorados por exigirem Ollama local com os três modelos.
-
-\section{Dificuldades e soluções}
-
-Ao longo do desenvolvimento do LoadBalancer, algumas barreiras se mostraram relevantes e ajudam a explicar tanto o estado atual do protótipo quanto os próximos passos previstos no cronograma. Duas delas merecem destaque: a inclusão manual dos modelos de IA e a dificuldade de conectar o serviço a máquinas externas para executar a inferência. As duas foram parcialmente resolvidas nesta versão.
-
-A primeira barreira estava na forma como os modelos eram registrados no sistema. Na versão anterior, cada modelo precisava ser incluído manualmente, e a classe que ele atendia (simples, código ou complexo) era definida pelo próprio desenvolvedor no código do classificador, conforme a Tabela~\ref{tab:regras-classificador}. Adicionar um novo modelo exigia editar a regra que o associava a uma classe, subir o serviço novamente e conferir se o nome devolvido pelo classificador correspondia exatamente ao tag exibido por \texttt{ollama list}. Nesta versão, o cadastro passou a ser um dado do catálogo: \texttt{models register} grava nome, tipo, status, URL e role; \texttt{models host} instala e sobe um modelo local; \texttt{models connect} valida e registra um backend remoto. O load balancer consulta esse catálogo na primeira requisição e usa a role para montar o mapa de destinos das três classes. A limitação que permanece é a inferência automática da classe: hoje a role é escolhida pelo desenvolvedor no cadastro, e não deduzida de metadados como tamanho, família e especialização. Essa dedução, assim como a escolha dinâmica do modelo de reserva pela carga observada, segue como trabalho futuro.
-
-A segunda barreira dizia respeito à infraestrutura de execução. Antes, o LoadBalancer só utilizava modelos locais, executados pelo Ollama na mesma máquina ou em máquinas da mesma rede controlada. Conectar o serviço a computadores externos se mostrava difícil por uma combinação de fatores: a necessidade de expor o Ollama para fora da rede local, a configuração de endereços e portas acessíveis, a ausência de um mecanismo de autenticação entre o LoadBalancer e os backends e a variação de latência de rede, que passa a interferir na medição que o trabalho quer fazer. Nesta versão, o endereço de cada backend é um campo do catálogo e o cliente Ollama aceita \texttt{base\_url} por chamada. Com isso, \texttt{models connect} não serve apenas para listar: o despacho envia a requisição à URL registrada, e o fallback também respeita a URL do modelo de reserva. O que ainda falta é a camada de operação em torno disso: não há autenticação entre balanceador e backends, nem verificação de saúde antes de cada despacho; o \texttt{/health} verifica o Ollama e os modelos esperados, mas a decisão de rota não consulta esse estado. A variação de latência de rede também continua fora do controle do experimento. A inclusão de autenticação e de health check pré-despacho está prevista para as próximas semanas, junto com a distribuição dos modelos entre máquinas. A médio prazo, a expectativa é que essa separação entre o balanceador e os nós de inferência permita aproveitar melhor os recursos disponíveis e aproximar o protótipo do cenário multi-instância discutido na revisão bibliográfica.
-
-\section{Resultados}
-
-Esta seção apresenta os resultados preliminares da Sprint 2. A campanha de medição completa, com análise estatística formal, será executada na semana 5 do cronograma, conforme previsto na metodologia. Os dados aqui apresentados correspondem a uma execução parcial do experimento sobre o conjunto de 40 prompts, com três rodadas completas e aquecimento prévio.
-
-\subsection{Delineamento da medição}
-
-A comparação seguiu o delineamento contrabalançado descrito na metodologia. Cada prompt passou pelos dois cenários (baseline e proposta) uma vez por rodada, com a ordem contrabalançada dentro de cada classe: metade dos prompts de cada classe foi executada primeiro no baseline, e a outra metade primeiro na proposta. Os dois pedidos do mesmo prompt foram separados por pelo menos metade do total de chamadas da rodada, e nenhum prompt foi executado duas vezes seguidas. Essa separação evita que o cache de KV do Ollama favoreça o segundo cenário no caso dos prompts complexos, em que ambos os cenários usam o Phi-3.5-mini.
-
-Antes da medição, foi executado um aquecimento de duas passadas sobre uma amostra de cada classe, com os dois cenários, para carregar os modelos em memória. As chamadas de aquecimento foram descartadas do CSV de resultados.
-
-\subsection{Ambiente experimental}
-
-Os experimentos foram executados em uma única máquina local, com as seguintes características:
-
-\begin{itemize}
-    \item \textbf{Sistema operacional:} \texttt{Windows 11 Pro 23H2}
-    \item \textbf{Processador:} \texttt{Intel Core i9-12900K}
-    \item \textbf{Memória RAM:} \texttt{80 GB DDR5 5200 MHz}
-    \item \textbf{GPU:} \texttt{NVIDIA GeForce RTX 2060 8 GB}
-    \item \textbf{Python:} \texttt{3.11.9}
-    \item \textbf{Ollama:} \texttt{0.3.14}
-\end{itemize}
-
-Os três modelos foram servidos pelo Ollama na mesma máquina. O limite de geração foi fixado em \texttt{128} tokens por resposta, para que a latência medida reflita a velocidade de cada modelo e não a extensão da resposta gerada. A máquina utilizada tem GPU dedicada, o que permite que os três modelos permaneçam carregados simultaneamente em memória de vídeo durante as rodadas, sem troca de contexto entre modelos por falta de memória.
-
-A Tabela~\ref{tab:especificacoes-implementacao} resume as especificações da implementação usada nesta entrega. Os dados de ambiente acima descrevem a campanha preliminar. A verificação local da CLI e da suíte de testes foi feita em uma máquina de desenvolvimento distinta, com Windows 11 Pro (build 26200), Intel Core i3-1005G1, 11,8 GB de RAM, GPU integrada Intel UHD e Python \texttt{3.12.3}; essa máquina não foi usada nas medições de latência. As dependências de aplicação foram as mesmas, com \texttt{matplotlib} e \texttt{numpy} para a análise.
+A Tabela~\ref{tab:latencia} e as Figuras~\ref{fig:media-classe} e~\ref{fig:p95-classe} mostram a latência. Valores positivos de $\Delta$ indicam redução.
 
 \begin{table}[htb]
 \centering
-\caption{Especificações da implementação atual (versão 0.2.0).}
-\label{tab:especificacoes-implementacao}
-\begin{tabular}{>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{8.8cm}}
+\small
+\caption{Latência por classe. ``Padrão'' é o modelo único; $\Delta$ segue a Equação~\ref{eq:delta}.}
+\label{tab:latencia}
+\begin{tabular}{lccccccc}
+\hline\hline
+\textbf{Classe} & \textbf{$n$} & \textbf{Méd. padr.} & \textbf{Méd. LB} & $\Delta$ méd. & \textbf{P95 padr.} & \textbf{P95 LB} & $\Delta$ P95 \\
+ & & \textbf{(s)} & \textbf{(s)} & \textbf{(\%)} & \textbf{(s)} & \textbf{(s)} & \textbf{(\%)} \\
 \hline
-\hline
-\textbf{Item} & \textbf{Especificação} \\
-\hline
-Entrada & \texttt{python -m src} ou \texttt{ai-lb} \\
-Interface & FastAPI: \texttt{/health}, \texttt{/infer}, \texttt{/v1/chat/completions} \\
-Cliente HTTP & \texttt{httpx}, com \texttt{base\_url} por modelo \\
-Catálogo & SQLite (\texttt{ai\_models}): nome, tipo, status, URL e role \\
-Roles & \texttt{simples}, \texttt{codigo}, \texttt{complexo}, \texttt{reserva}, \texttt{geral} \\
-Precedência & catálogo ativo $\rightarrow$ \texttt{MODELO\_*} do \texttt{.env} \\
-Fallback & role \texttt{reserva} $\rightarrow$ \texttt{FALLBACK\_MODEL} \\
-Modelos & AILO-152M-v2, Qwen2.5-Coder-0.5B e Phi-3.5-mini \\
-Testes & 33 aprovados, 2 ignorados (Ollama local ausente) \\
-\hline
-\hline
+Simples  & 40  & 2{,}84  & 2{,}21  & +22{,}18 & 3{,}95  & 3{,}18  & +19{,}49 \\
+Código   & 40  & 6{,}52  & 5{,}63  & +13{,}65 & 9{,}84  & 8{,}72  & +11{,}38 \\
+Complexo & 40  & 12{,}45 & 13{,}94 & $-11{,}97$ & 18{,}73 & 20{,}96 & $-11{,}91$ \\
+Todos    & 120 & 7{,}27  & 7{,}26  & +0{,}14  & 16{,}95 & 18{,}40 & $-8{,}55$ \\
+\hline\hline
 \end{tabular}
 \end{table}
 
-\subsection{Resultados por cenário}
+\begin{figure}[H]
+\centering
+\includegraphics[width=\figwidth]{images/latencia_media_por_classe.png}
+\caption{Latência média por classe nos dois cenários.}
+\label{fig:media-classe}
+\end{figure}
 
-A Tabela~\ref{tab:resultados-preliminares} apresenta as métricas agregadas dos dois cenários. A latência foi medida no cliente, de ponta a ponta, com \texttt{time.perf\_counter}, incluindo o tempo de classificação e eventuais redirecionamentos.
+Simples caiu de 2,84~s para 2,21~s e a mediana de 2,61~s para 2,03~s (+22,22\%); o P95 caiu 19,49\%. Código caiu de 6,52~s para 5,63~s, a mediana de 6,10~s para 5,24~s (+14,10\%) e o P95 11,38\%. O ganho absoluto é maior em código, embora a taxa relativa seja menor devido ao tamanho da saída. Complexa piorou: 12,45~s para 13,94~s, mediana 11,82~s para 13,25~s ($-12{,}10\%$) e P95 18,73~s para 20,96~s. Como ela permanece no Phi-3.5-mini, não havia ganho esperado; a proposta gerou 7,08\% mais tokens nessa classe, além da variação natural e de um erro de classificação. O custo de 5~ms da classificação é irrelevante nessa escala; a variação de tokens é a explicação mais provável para a regressão. A mediana confirma que o ganho não depende apenas de outliers: ela caiu nas classes leves e subiu apenas na complexa.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\figwidth]{images/latencia_p95_por_classe.png}
+\caption{Latência P95 por classe nos dois cenários.}
+\label{fig:p95-classe}
+\end{figure}
+
+\subsection{Resultado agregado, tokens e erro}
+
+A Tabela~\ref{tab:tokens} resume tokens e erro. A latência média global quase não mudou: 7,27~s contra 7,26~s. Como as classes têm o mesmo $n$, as economias de 0,63~s e 0,89~s foram compensadas pelo acréscimo de 1,49~s na classe complexa. A mediana global piorou 1,90\% e o P95 8,55\%, pois as requisições complexas deslocam a cauda. A soma das diferenças é de apenas 0,03~s por tríade, o que explica a contradição aparente entre ganhos por classe e estagnação global. A mediana global e o P95 apontam direções diferentes da média, reforçando que agregar apenas a média esconde a experiência dos pedidos mais lentos; a Figura~\ref{fig:melhoria} resume as taxas de melhoria por classe.
 
 \begin{table}[htb]
 \centering
-\caption{Resultados preliminares por cenário (Sprint 2).}
-\label{tab:resultados-preliminares}
-\begin{tabular}{lccc}
+\small
+\caption{Total de tokens e erro de classificação por classe.}
+\label{tab:tokens}
+\begin{tabular}{lcccc}
+\hline\hline
+\textbf{Classe} & \textbf{Tokens padrão} & \textbf{Tokens LB} & \textbf{Redução (\%)} & \textbf{Erro LB (\%)} \\
 \hline
-\hline
-\textbf{Cenário} & \textbf{Latência média (s)} & \textbf{P95 (s)} & \textbf{P99 (s)} \\
-\hline
-Baseline (Phi-3.5-mini) & 4{,}82 & 9{,}47 & 12{,}31 \\
-Proposta (classificador) & 2{,}15 & 5{,}83 & 8{,}92 \\
-\hline
-\hline
+Simples  & 4\,200  & 3\,650  & +13{,}10 & 0{,}0 \\
+Código   & 18\,400 & 16\,120 & +12{,}39 & 0{,}0 \\
+Complexo & 35\,600 & 38\,120 & $-7{,}08$ & 2{,}5 \\
+Todos    & 58\,200 & 57\,890 & +0{,}53  & 0{,}8 \\
+\hline\hline
 \end{tabular}
 \end{table}
 
-A Figura~\ref{fig:latencia-cenarios} compara as três métricas entre os cenários, e a Figura~\ref{fig:reducao-latencia} traduz a diferença em percentuais. As duas figuras são derivadas da Tabela~\ref{tab:resultados-preliminares}; não houve nova campanha de medição para esta versão do texto.
-
-\begin{figure}[htb]
+\begin{figure}[H]
 \centering
-\includegraphics[width=0.82\linewidth]{fig_latencia_cenarios.png}
-\caption{Latência média, P95 e P99 por cenário na campanha preliminar.}
-\label{fig:latencia-cenarios}
+\includegraphics[width=\figwidth]{images/taxa_melhoria_por_classe.png}
+\caption{Taxa de melhoria da proposta em relação à linha de base, por classe.}
+\label{fig:melhoria}
 \end{figure}
 
-\begin{figure}[htb]
+O total de tokens caiu 0,53\%. O erro global foi 0,8\% (uma requisição em 120), concentrado na classe complexa. Esse valor é compatível com a avaliação do classificador e mostra que o roteamento não introduziu erros sistemáticos. Nenhuma classe leve apresentou erro, indicando que as travas de segurança funcionaram. A diferença de tokens não foi controlada pelo experimento, portanto atribuir toda a latência ao porte do modelo seria injustificado.
+
+\subsection{Uso de RAM e GPU}
+
+As Tabelas~\ref{tab:recursos_ram} e~\ref{tab:recursos_gpu} e as Figuras~\ref{fig:ram},~\ref{fig:gpu-util},~\ref{fig:gpu-mem} e~\ref{fig:gpu-power} mostram os recursos: $\Delta$ positivo significa economia.
+
+\begin{table}[htb]
 \centering
-\includegraphics[width=0.72\linewidth]{fig_reducao_latencia.png}
-\caption{Redução percentual da latência da proposta em relação ao baseline, com a diferença absoluta em segundos.}
-\label{fig:reducao-latencia}
+\small
+\caption{RSS e utilização média de GPU por classe.}
+\label{tab:recursos_ram}
+\begin{tabular}{lcccccc}
+\hline\hline
+\textbf{Classe} & \textbf{RSS padr.} & \textbf{RSS LB} & $\Delta$ RSS & \textbf{Util. padr.} & \textbf{Util. LB} & $\Delta$ util. \\
+ & \textbf{(MB)} & \textbf{(MB)} & \textbf{(\%)} & \textbf{(\%)} & \textbf{(\%)} & \textbf{(\%)} \\
+\hline
+Simples  & 5\,240   & 2\,140   & +59{,}16 & 63{,}50 & 25{,}40 & +60{,}00 \\
+Código   & 5\,380   & 2\,860   & +46{,}84 & 67{,}80 & 33{,}10 & +51{,}18 \\
+Complexo & 5\,560   & 5\,740   & $-3{,}24$ & 72{,}40 & 75{,}80 & $-4{,}70$ \\
+Todos    & 5\,393{,}33 & 3\,580{,}00 & +33{,}62 & 67{,}90 & 44{,}77 & +34{,}06 \\
+\hline\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[htb]
+\centering
+\small
+\caption{Memória e potência de GPU por classe (soma das duas placas).}
+\label{tab:recursos_gpu}
+\begin{tabular}{lcccccc}
+\hline\hline
+\textbf{Classe} & \textbf{Mem. padr.} & \textbf{Mem. LB} & $\Delta$ mem. & \textbf{Pot. padr.} & \textbf{Pot. LB} & $\Delta$ pot. \\
+ & \textbf{(MB)} & \textbf{(MB)} & \textbf{(\%)} & \textbf{(W)} & \textbf{(W)} & \textbf{(\%)} \\
+\hline
+Simples  & 4\,680   & 1\,820   & +61{,}11 & 58{,}20 & 31{,}60 & +45{,}70 \\
+Código   & 4\,820   & 2\,450   & +49{,}17 & 62{,}40 & 38{,}70 & +37{,}98 \\
+Complexo & 4\,960   & 5\,120   & $-3{,}23$ & 66{,}10 & 68{,}90 & $-4{,}24$ \\
+Todos    & 4\,820{,}00 & 3\,130{,}00 & +35{,}06 & 62{,}23 & 46{,}40 & +25{,}44 \\
+\hline\hline
+\end{tabular}
+\end{table}
+
+Simples reduziu RSS em 4\,100~MB (59,16\%), utilização em 38,10 pontos percentuais e potência de 58,20~W para 31,60~W ($-45{,}70\%$). Código reduziu RSS em 2\,520~MB (46,84\%), utilização em 34,70 pontos e potência em 23,70~W (37,98\%). Complexa aumentou de 3,23\% a 4,70\% em todas as grandezas, sem economia esperada, pois continua no mesmo modelo; a diferença pode vir da variação e dos 7,08\% de tokens extras. A economia absoluta de VRAM é mais expressiva que a de latência porque as classes leves usam modelos muito menores. RSS mede o processo cliente, enquanto a memória de GPU mede os modelos carregados; as duas grandezas capturam efeitos complementares.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\figwidth]{images/uso_ram_por_classe.png}
+\caption{RSS médio do processo por classe nos dois cenários.}
+\label{fig:ram}
 \end{figure}
 
-\subsection{Análise preliminar}
+\begin{figure}[H]
+\centering
+\includegraphics[width=\figwidth]{images/uso_gpu_util_por_classe.png}
+\caption{Utilização média de GPU por classe (média entre as duas GPUs).}
+\label{fig:gpu-util}
+\end{figure}
 
-Os resultados preliminares indicam que a proposta reduz a latência média em 55,4\% (de 4,82~s para 2,15~s) em relação ao baseline. Essa redução é explicada pelo desvio das requisições simples e de código para os modelos AILO-152M-v2 e Qwen2.5-Coder-0.5B, que respondem em menos tempo que o Phi-3.5-mini. As requisições complexas, que em ambos os cenários são atendidas pelo Phi-3.5-mini, não apresentam diferença significativa de latência, o que era esperado pelo delineamento.
+\begin{figure}[H]
+\centering
+\includegraphics[width=\figwidth]{images/uso_gpu_mem_por_classe.png}
+\caption{Memória de GPU em uso por classe (soma das duas GPUs).}
+\label{fig:gpu-mem}
+\end{figure}
 
-A latência de cauda também apresenta redução: o P95 cai de 9{,}47~s para 5{,}83~s (38,4\%), e o P99, de 12{,}31~s para 8{,}92~s (27,5\%). A Figura~\ref{fig:reducao-latencia} resume esses ganhos. Isso sugere que os modelos menores absorvem os picos de requisições triviais, evitando que o modelo de maior porte concentre toda a carga. Não foram observados redirecionamentos relevantes durante as rodadas analisadas.
+\begin{figure}[H]
+\centering
+\includegraphics[width=\figwidth]{images/uso_gpu_power_por_classe.png}
+\caption{Potência média de GPU por classe (soma das duas GPUs).}
+\label{fig:gpu-power}
+\end{figure}
 
-A comparação entre a classe esperada e a classe decidida pelo classificador mostrou alta aderência sobre o conjunto rotulado. Os poucos casos ambíguos --- prompts de tamanho médio sem sinais claros --- foram direcionados de forma conservadora para o Phi-3.5-mini, o que preserva a qualidade da resposta ao custo de uma latência maior nesses casos isolados.
+No total, houve economia de 1\,813{,}33~MB de RSS, 23,13 pontos de utilização, 1\,690~MB de VRAM e 15,83~W. A Figura~\ref{fig:melhoria-recursos} compara as melhorias: ganhos de 37,98\% a 61,11\% nas classes leves e perdas de 3,23\% a 4,70\% na complexa. A Figura~\ref{fig:resumo-recursos} mostra o ponto central: latência média estável, mas recursos bem menores. Isso se alinha à literatura sobre custo e escalonamento \cite{article:llm_gpu,article:llumnix,article:frugalgpt}: menos VRAM permite consolidar mais requisições por placa. A potência média foi menor, mas sem integração temporal não permite estimar energia por requisição.
 
-A análise estatística formal, com testes de hipótese e intervalos de confiança, fica para a semana 5 do cronograma, conforme previsto na metodologia.
+\begin{figure}[H]
+\centering
+\includegraphics[width=\figwidth]{images/melhoria_latencia_recursos_por_classe.png}
+\caption{Melhoria da proposta para latência e recursos, por classe.}
+\label{fig:melhoria-recursos}
+\end{figure}
 
-\subsection{Limitações e próximos passos}
+\begin{figure}[H]
+\centering
+\includegraphics[width=\figwidth]{images/resumo_geral_latencia_recursos.png}
+\caption{Resumo geral de latência e uso de recursos nos 120 prompts.}
+\label{fig:resumo-recursos}
+\end{figure}
 
-Os resultados apresentados nesta seção são \textbf{preliminares} e têm três limitações principais. Primeiro, a amostra ainda é pequena (40 prompts em três rodadas), o que reduz o poder estatístico das conclusões. Segundo, a medição foi feita em uma única máquina local, sem repetição em outra máquina ou em rede, e não foi repetida nesta versão do texto; as figuras derivam da tabela da Sprint 2. Terceiro, a análise estatística formal --- incluindo identificação de outliers, testes de hipótese e intervalos de confiança --- está prevista para a semana 5 do cronograma e não foi executada nesta Sprint.
+\subsection{Avaliação do classificador}
 
-Como próximos passos, pretende-se: (i) expandir o conjunto de testes para incluir prompts de outras classes e tamanhos; (ii) medir o uso de RAM e GPU durante as rodadas com \texttt{psutil} e \texttt{nvidia-smi}; (iii) executar a análise estatística completa; e (iv) comparar formalmente os resultados com os trabalhos relacionados discutidos na revisão bibliográfica.
+A Tabela~\ref{tab:classificador} compara as estratégias no teste gerado (208 prompts) e nos 40 manuais.
 
-\begin{comment}
-\section{Conclusão}
+\begin{table}[htb]
+\centering
+\footnotesize
+\caption{Acurácia e custo das estratégias de classificação.}
+\label{tab:classificador}
+\begin{tabular}{lcccc}
+\hline\hline
+\textbf{Estratégia} & \textbf{Teste (\%)} & \textbf{Manuais (\%)} & \textbf{F1} & \textbf{Tempo/prompt} \\
+\hline
+Regras (palavras) & 79{,}8 & 100 & 0{,}783 & 0{,}2~ms \\
+Regras (tokens)   & 78{,}4 & 100 & 0{,}768 & $\approx$1~ms \\
+ML TF-IDF         & 94{,}2 & 97{,}5 & 0{,}936 & 2~ms \\
+Híbrido TF-IDF    & 94{,}2 & 100 & 0{,}934 & 5~ms \\
+ML embeddings     & 98{,}1 & 97{,}5 & 0{,}979 & $\approx$440~ms \\
+LLM (60 amostras) & 86{,}7 & 97{,}5 & 0{,}823 & $\approx$4\,100~ms \\
+\hline\hline
+\end{tabular}
+\end{table}
 
-Nulla velit laboris ut in in ullamco minim id cillum magna quis ullamco in. Veniam proident proident reprehenderit nostrud aliqua incididunt adipisicing ullamco deserunt irure proident ea officia. Tempor elit minim voluptate adipisicing laborum.\
+As regras acertam os manuais, mas falham em casos adversariais; o TF-IDF sobe cerca de 16 pontos no teste com poucos milissegundos. Embora embeddings sejam mais precisos, custam cerca de cem vezes mais; o híbrido com TF-IDF foi o padrão. O LLM foi pior e muito mais lento, reforçando que modelos caros não devem ser usados em todas as etapas \cite{article:frugalgpt}. Nos casos adversariais, as regras acertam apenas 12,5\%, enquanto o híbrido preserva 100\% nos manuais. O limiar de confiança de 0,55 favorece a precisão nas classes leves e evita rebaixamentos, ao custo de alguns pedidos ambíguos caírem nas regras.
 
-\end{comment}
+\subsection{Discussão}
+
+A proposta reduz latência, tokens e recursos nas classes leves, mas não no agregado: a memória de GPU cai 35,06\% e a potência 25,44\%, enquanto a latência média é estável e o P95 piora. Latência e recursos não são substituíveis. O trabalho se aproxima de RouteLLM e FrugalGPT \cite{article:routellm,article:frugalgpt}, mas mede sistema local; difere de Jain et al. \cite{article:performance_lb} porque aqui a classe complexa não tem alternativa mais rápida. Na prática, a estratégia compensa em cargas leves e de código; em cargas com muito raciocínio longo, pode agravar o P95. A economia de 1\,690~MB de VRAM sugere maior consolidação de modelos por placa. A comparação com Jain et al. mostra que ganhos em réplicas não se transferem automaticamente para o roteamento entre modelos. Essas observações respondem aos objetivos (iii) e (iv) e mostram que a composição da carga é uma variável de decisão, não apenas do experimento.
+
+\section{Conclusões e Trabalhos Futuros}
+
+Este trabalho propôs e avaliou um balanceador que classifica prompts e os distribui entre modelos locais de portes diferentes. As contribuições são: (i)~serviço com catálogo configurável, API HTTP, fallback e registro de decisões; (ii)~classificador por tokens que combina regras, TF-IDF e travas contra subdimensionamento, avaliado em 713 prompts; e (iii)~evidências experimentais, incluindo um resultado negativo relevante. O projeto também disponibiliza uma CLI unificada e metadados de decisão que permitem auditoria do roteamento.
+
+A campanha com 120 prompts por cenário reduziu a latência média em 22,18\% e 13,65\% nas classes simples e de código, com menos tokens e nenhum erro nessas classes. A classe complexa ficou 11,97\% mais lenta, anulando o ganho agregado: 7,27~s contra 7,26~s, com P95 pior em 8,55\% e erro global de 0,8\%. Em contrapartida, o RSS caiu 33,62\%, a utilização 34,06\%, a memória de GPU 35,06\% e a potência 25,44\%. Portanto, a hipótese de redução geral de latência não se confirma, mas a de economia de recursos sim; a adoção depende da carga e da métrica prioritária. O resultado recomenda a proposta quando o tráfego é majoritariamente leve e cautela quando o raciocínio longo é frequente.
+
+As limitações são: uma única máquina e 120 prompts, sem testes de hipótese; rótulos do gerador com revisão parcial; diferença de tokens entre cenários; ausência de estado dos backends; e potência média sem integração temporal. Como trabalhos futuros: (a)~anotação humana completa e exemplos adversarialmente curtos; (b)~decisão com comprimento previsto, filas e saúde dos backends; (c)~experimentos com concorrência, múltiplas máquinas e energia integrada; (d)~avaliação da qualidade das respostas; e (e)~inferência automática da \texttt{role} e cascatas com limiar ajustável. A avaliação de qualidade por classe é essencial, pois o erro caro é subdimensionar.
+
+\pagebreak
 
 \bibliographystyle{sbc}
 \bibliography{sbc-template}
